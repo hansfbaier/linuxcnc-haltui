@@ -101,8 +101,12 @@ pub struct App {
 
     pub tree: HalTree,
     pub tree_list: ListState,
+    /// rows visible in the tree viewport (updated by the renderer)
+    pub tree_page: usize,
     pub watch: Vec<WatchItem>,
     pub watch_state: TableState,
+    /// rows visible in the watch viewport (updated by the renderer)
+    pub watch_page: usize,
     pub settings_state: ListState,
 
     pub tab: Tab,
@@ -112,6 +116,8 @@ pub struct App {
 
     pub show_text: String,
     pub show_scroll: usize,
+    /// rows visible in the SHOW text viewport (updated by the renderer)
+    pub show_page: usize,
     pub shown_node: Option<(HalType, String)>,
 
     pub command: String,
@@ -155,8 +161,10 @@ impl App {
             ifmt_override: cli.iformat.clone(),
             tree: HalTree::new(),
             tree_list: ListState::default(),
+            tree_page: 10,
             watch: Vec::new(),
             watch_state: TableState::default(),
+            watch_page: 10,
             settings_state: ListState::default(),
             tab,
             settings_open,
@@ -164,6 +172,7 @@ impl App {
             input: None,
             show_text: String::new(),
             show_scroll: 0,
+            show_page: 10,
             shown_node: None,
             command: String::new(),
             hist: Vec::new(),
@@ -700,6 +709,14 @@ impl App {
                 self.help_scroll = 0;
                 return;
             }
+            KeyCode::Char('/') => {
+                // search: start a fresh search — clear the previous filter,
+                // unfilter the tree, and focus the filter entry
+                self.tree.filter.clear();
+                self.tree.rebuild(&self.hal);
+                self.focus = Focus::Filter;
+                return;
+            }
             KeyCode::Tab => {
                 self.next_tab();
                 return;
@@ -961,12 +978,9 @@ impl App {
                 self.focus = Focus::Tree;
                 self.tree.rebuild(&self.hal);
             }
-            KeyCode::Char('f') => {
-                self.tree.full_path = !self.tree.full_path;
-                self.tree.rebuild(&self.hal);
-            }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.tree.filter.clear();
+                self.tree.rebuild(&self.hal);
             }
             KeyCode::Backspace => {
                 self.tree.filter.pop();
@@ -1014,6 +1028,14 @@ impl App {
             }
             KeyCode::Down => {
                 self.tree_move(1);
+                self.preview_selection();
+            }
+            KeyCode::PageUp => {
+                self.tree_move(-(self.tree_page.max(1) as i32));
+                self.preview_selection();
+            }
+            KeyCode::PageDown => {
+                self.tree_move(self.tree_page.max(1) as i32);
                 self.preview_selection();
             }
             KeyCode::Right => {
@@ -1118,9 +1140,6 @@ impl App {
                     self.tree.collapse_kind(kind);
                 }
             }
-            KeyCode::Char('/') => {
-                self.focus = Focus::Filter;
-            }
             KeyCode::Char('f') => {
                 self.tree.full_path = !self.tree.full_path;
                 self.tree.rebuild(&self.hal);
@@ -1163,8 +1182,10 @@ impl App {
             KeyCode::Left => self.focus = Focus::Tree,
             KeyCode::Up => self.show_scroll = self.show_scroll.saturating_sub(1),
             KeyCode::Down => self.show_scroll += 1,
-            KeyCode::PageUp => self.show_scroll = self.show_scroll.saturating_sub(10),
-            KeyCode::PageDown => self.show_scroll += 10,
+            KeyCode::PageUp => {
+                self.show_scroll = self.show_scroll.saturating_sub(self.show_page.max(1));
+            }
+            KeyCode::PageDown => self.show_scroll += self.show_page.max(1),
             KeyCode::Home => self.show_scroll = 0,
             KeyCode::Char('a') => {
                 if let Some((kind, name)) = self.shown_node.clone() {
@@ -1191,6 +1212,22 @@ impl App {
             KeyCode::Down => {
                 if let Some(s) = self.watch_state.selected() {
                     let next = (s + 1).min(self.watch.len().saturating_sub(1));
+                    self.watch_state.select(Some(next));
+                } else if !self.watch.is_empty() {
+                    self.watch_state.select(Some(0));
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(s) = self.watch_state.selected() {
+                    self.watch_state
+                        .select(Some(s.saturating_sub(self.watch_page.max(1))));
+                } else if !self.watch.is_empty() {
+                    self.watch_state.select(Some(0));
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(s) = self.watch_state.selected() {
+                    let next = (s + self.watch_page.max(1)).min(self.watch.len().saturating_sub(1));
                     self.watch_state.select(Some(next));
                 } else if !self.watch.is_empty() {
                     self.watch_state.select(Some(0));

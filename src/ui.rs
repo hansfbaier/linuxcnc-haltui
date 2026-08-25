@@ -94,12 +94,12 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         }
         (_, Some(_)) => " Enter ok | Esc cancel | Ctrl+U clear | F1 help ".to_string(),
         (Focus::Tree, None) => {
-            " ↑↓ nav | → expand closed / else right panel | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
+            " ↑↓/PgUp/PgDn nav | → expand closed / else right panel | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
              s show | e/w expand/collapse all | E/W this type | / filter | f full-path | r reload | \
              F2 tree | [ ] resize ".to_string()
         }
         (Focus::Filter, None) => {
-            " type = regex filter (live) | f full-path | Ctrl+U clear | Esc/Enter done ".to_string()
+            " type = regex filter (live) | Ctrl+U clear | Esc/Enter done ".to_string()
         }
         (Focus::ShowText, None) => {
             " ← tree | ↑↓/PgUp/PgDn scroll | a add shown to watch | c command | F3 content | F4 command ".to_string()
@@ -108,14 +108,14 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
             " ← tree | Enter run halcmd | ↑↓ history | Esc back | Ctrl+U clear ".to_string()
         }
         (Focus::Watch, None) => {
-            " ← tree | ↑↓ sel | Space toggle bit | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
+            " ← tree | ↑↓ sel | PgUp/PgDn page | Space toggle bit | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
              a add | o show in tree | S save | m save multiline | L load ".to_string()
         }
         (Focus::Settings, None) => {
             " ← close + tree | Esc/F5 close | ↑↓ sel | Enter edit/toggle | Apply = Enter on last row ".to_string()
         }
     };
-    let global = "1 SHOW  2 WATCH | Tab next tab | F5 settings | q quit";
+    let global = "1 SHOW  2 WATCH | / search | Tab next tab | F5 settings | q quit";
     let text = format!(" {hints} | {global}");
     f.render_widget(
         Paragraph::new(Span::styled(
@@ -128,10 +128,24 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::bordered().title("Tree View");
+    f.render_widget(block.clone(), area);
+    let inner = block.inner(area);
+    // list on top, filter entry on its own bottom row (no overlay, so the
+    // list's auto-scroll keeps the selection truly visible)
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(inner);
+    let list_area = rows[0];
+    let filter_area = rows[1];
     let vis = tree::visible(&app.tree.roots);
+    // viewport rows for paging
+    app.tree_page = list_area.height.max(1) as usize;
+    let sel = vis.iter().position(|(p, _, _)| *p == app.tree.selected);
     let items: Vec<ListItem> = vis
         .iter()
-        .map(|(path, depth, branch)| {
+        .enumerate()
+        .map(|(i, (path, depth, branch))| {
             let node = tree::find_node(&app.tree.roots, path);
             let indent = "  ".repeat(*depth);
             let marker = if *branch {
@@ -143,6 +157,12 @@ fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 "  "
             };
+            // selection pointer only when the node has children
+            let cursor = if Some(i) == sel && *branch {
+                "▶ "
+            } else {
+                "  "
+            };
             let style = match node {
                 Some(n) if n.depth_root() => Style::default().add_modifier(Modifier::BOLD),
                 Some(n) if n.leaf => Style::default().fg(kind_color(n.kind)),
@@ -150,31 +170,28 @@ fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
             };
             let label = node.map(|n| n.name.clone()).unwrap_or_default();
             ListItem::new(Line::from(Span::styled(
-                format!("{indent}{marker}{label}"),
+                format!("{cursor}{indent}{marker}{label}"),
                 style,
             )))
         })
         .collect();
-    let sel = vis.iter().position(|(p, _, _)| *p == app.tree.selected);
     if app.tree_list.selected().is_none() || app.tree_list.selected() != sel {
         app.tree_list.select(sel);
     }
     let list = List::new(items)
-        .block(block)
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▶ ");
-    f.render_stateful_widget(list, area, &mut app.tree_list);
+        .highlight_symbol("");
+    f.render_stateful_widget(list, list_area, &mut app.tree_list);
 
-    // filter entry at the bottom of the tree panel
+    // filter entry in its own row
     let filter_area = Rect {
-        x: area.x + 1,
-        y: area.y + area.height.saturating_sub(2),
-        width: area.width.saturating_sub(2),
-        height: 1,
+        x: filter_area.x + 1,
+        width: filter_area.width.saturating_sub(2),
+        ..filter_area
     };
     let mut text = String::from("Filter: ");
     if app.tree.filter.is_empty() {
@@ -236,6 +253,8 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
     let block = Block::bordered().title(" HAL show output ");
     let inner = block.inner(rows[0]);
+    // viewport rows for paging
+    app.show_page = inner.height.max(1) as usize;
     let lines: Vec<&str> = app.show_text.lines().collect();
     let total = lines.len();
     let max_scroll = total.saturating_sub(inner.height as usize);
@@ -284,6 +303,8 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_watch(f: &mut Frame, app: &mut App, area: Rect) {
+    // viewport rows for paging (panel minus border)
+    app.watch_page = area.height.saturating_sub(2).max(1) as usize;
     if app.watch.is_empty() {
         let hint = "Watchlist empty.\n<-- Select a leaf in the tree, press Enter (WATCH tab) or 'a'.\n    Press 'a' here to add by name.";
         f.render_widget(
@@ -573,11 +594,13 @@ GLOBAL
   F3                  focus current tab content
   F4                  focus HAL command entry
   F5                  open / close the settings screen
+  /                   fresh search from any panel (clears previous filter)
   [ / ]               shrink / grow tree panel
   r                   reload (tree: refresh from HAL, watch: re-read writability)
 
 TREE PANEL
   ↑ ↓                 move selection (live-previews in SHOW tab)
+  PgUp / PgDn         page through the tree
   →                   expand closed node / else jump to right panel
   ←                   collapse node / go to parent
   Space               toggle expand
@@ -593,9 +616,8 @@ TREE PANEL
 
 FILTER ENTRY
   type                live regex filter; matching branches auto-reveal
-  f                   toggle full-path matching
   Ctrl+U              clear filter
-  Esc / Enter         return to tree
+  Esc / Enter         return to tree (toggle full-path with 'f' back in the tree)
 
 SHOW TAB
   ←                   back to tree view
@@ -614,6 +636,7 @@ HAL COMMAND ENTRY
 WATCH TAB
   ←                   back to tree view
   ↑ ↓                 select item
+  PgUp / PgDn         page through the list
   Space               toggle a writable bit value
   Enter               set value (writable items); unlink (linked items)
   s / c               set bit to 1 / clear bit to 0

@@ -74,20 +74,21 @@ Full list is in-app: press `F1` or `?` (self-documenting). Summary:
 | `1` `2` | SHOW / WATCH tab |
 | `F2` `F3` `F4` | focus tree / content / command entry |
 | `F5` | open / close the settings screen |
+| `/` | fresh tree search from any panel (clears previous filter) |
 | `[` `]` | shrink / grow tree panel |
 
-**Tree:** `↑↓` move (with SHOW tab active, the pane live-previews the
-selection), `→` expand a closed node / else jump to the right panel,
-`←` collapse / parent, `Space` toggle, `Enter` show or
+**Tree:** `↑↓` move / `PgUp PgDn` page (with SHOW tab active, the pane
+live-previews the selection), `→` expand a closed node / else jump to the
+right panel, `←` collapse / parent, `Space` toggle, `Enter` show or
 add-to-watch, `a` add leaf, `A` add subtree, `s` show in SHOW, `e`/`w`
 expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
 
 **SHOW:** `↑↓ PgUp PgDn Home` scroll, `a` add shown item, `c` focus command.
 
-**WATCH:** `↑↓` select, `Space` toggle a writable bit, `Enter` set value,
-`s`/`c` set/clear bit, `u` unlink, `x` remove, `r` reload, `e` erase,
-`a` add by name, `o` show in tree, `S` save (oneline), `m` save
-(multiline), `L` load.
+**WATCH:** `↑↓` select / `PgUp PgDn` page, `Space` toggle a writable bit,
+`Enter` set value, `s`/`c` set/clear bit, `u` unlink, `x` remove, `r`
+reload, `e` erase, `a` add by name, `o` show in tree, `S` save (oneline),
+`m` save (multiline), `L` load.
 
 **Settings screen:** `↑↓` select field, `Enter`/`Space` edit or toggle,
 `Esc`/`F5` close, `←` close + back to tree.

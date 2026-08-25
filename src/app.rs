@@ -343,6 +343,8 @@ impl App {
             value: String::new(),
             error: false,
         });
+        // select the new item so the watch table scrolls it into view
+        self.watch_state.select(Some(self.watch.len() - 1));
         if verbose {
             self.set_status(format!("'{name}' added"), false);
         }
@@ -480,9 +482,15 @@ impl App {
             .iter()
             .map(|w| (w.kind, w.name.clone()))
             .collect();
+        let sel = self.watch_state.selected();
         self.watch.clear();
         for (k, n) in items {
             self.watch_add(k, &n, false);
+        }
+        // preserve the previous selection (watch_add selects the new item)
+        if let Some(s) = sel {
+            self.watch_state
+                .select(Some(s.min(self.watch.len().saturating_sub(1))));
         }
         self.poll_watch();
     }
@@ -1045,9 +1053,14 @@ impl App {
                 if !n.expanded && n.is_branch() {
                     // closed parent: expand it in place
                     self.tree_set_expanded(&n.path, true);
-                } else {
-                    // already expanded (branch or leaf): hand focus to the
-                    // right panel
+                } else if self.tab != Tab::Show {
+                    // expanded branch or leaf: hand focus to the right panel
+                    self.preview_selection();
+                    self.focus_content();
+                } else if self.show_text.lines().count() > self.show_page.max(1) {
+                    // SHOW tab: only jump to the pane when there is
+                    // something to do there — the output is scrollable
+                    // (more than one visible page)
                     self.preview_selection();
                     self.focus_content();
                 }

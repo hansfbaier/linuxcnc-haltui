@@ -78,8 +78,9 @@ Full list is in-app: press `F1` or `?` (self-documenting). Summary:
 | `[` `]` | shrink / grow tree panel |
 
 **Tree:** `↑↓` move / `PgUp PgDn` page (with SHOW tab active, the pane
-live-previews the selection), `→` expand a closed node / else jump to the
-right panel, `←` collapse / parent, `Space` toggle, `Enter` show or
+live-previews the selection), `→` expand a closed node; on an open node it
+jumps to the right pane when useful (WATCH list, or SHOW output longer
+than one page), `←` collapse / parent, `Space` toggle, `Enter` show or
 add-to-watch, `a` add leaf, `A` add subtree, `s` show in SHOW, `e`/`w`
 expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
 
@@ -88,7 +89,8 @@ expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
 **WATCH:** `↑↓` select / `PgUp PgDn` page, `Space` toggle a writable bit,
 `Enter` set value, `s`/`c` set/clear bit, `u` unlink, `x` remove, `r`
 reload, `e` erase, `a` add by name, `o` show in tree, `S` save (oneline),
-`m` save (multiline), `L` load.
+`m` save (multiline), `L` load. Newly added items are selected so they
+are scrolled into view.
 
 **Settings screen:** `↑↓` select field, `Enter`/`Space` edit or toggle,
 `Esc`/`F5` close, `←` close + back to tree.

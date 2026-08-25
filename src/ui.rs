@@ -94,7 +94,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         }
         (_, Some(_)) => " Enter ok | Esc cancel | Ctrl+U clear | F1 help ".to_string(),
         (Focus::Tree, None) => {
-            " ↑↓/PgUp/PgDn nav | → expand closed / else right panel | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
+            " → expand closed / → pane if scrollable | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
              s show | e/w expand/collapse all | E/W this type | / filter | f full-path | r reload | \
              F2 tree | [ ] resize ".to_string()
         }
@@ -108,7 +108,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
             " ← tree | Enter run halcmd | ↑↓ history | Esc back | Ctrl+U clear ".to_string()
         }
         (Focus::Watch, None) => {
-            " ← tree | ↑↓ sel | PgUp/PgDn page | Space toggle bit | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
+            " ← tree | Space toggle bit | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
              a add | o show in tree | S save | m save multiline | L load ".to_string()
         }
         (Focus::Settings, None) => {
@@ -601,7 +601,8 @@ GLOBAL
 TREE PANEL
   ↑ ↓                 move selection (live-previews in SHOW tab)
   PgUp / PgDn         page through the tree
-  →                   expand closed node / else jump to right panel
+  →                   expand closed node; open node jumps to the right pane
+                      when useful (WATCH list, or scrollable SHOW output)
   ←                   collapse node / go to parent
   Space               toggle expand
   Enter               open node in SHOW tab (or add to watch in WATCH tab)
@@ -649,6 +650,8 @@ WATCH TAB
   S                   save watch list (one line per file, halshow default)
   m                   save watch list (multiline format)
   L                   load watch list (.halshow file)
+
+  Newly added items are selected so they are scrolled into view.
 
 SETTINGS SCREEN (F5)
   ←                   close + back to tree view

@@ -592,7 +592,7 @@ TREE PANEL
   Ctrl+U (filter)     clear filter
 
 FILTER ENTRY
-  type                live regex filter on node names (or full path with 'f')
+  type                live regex filter; matching branches auto-reveal
   f                   toggle full-path matching
   Ctrl+U              clear filter
   Esc / Enter         return to tree

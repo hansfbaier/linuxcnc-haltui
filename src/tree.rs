@@ -83,28 +83,34 @@ impl HalTree {
             roots.push(root);
         }
         self.roots = roots;
-        // restore expanded state
-        let mut reopen = |path: &str| {
-            let mut cur = &mut self.roots;
-            let mut acc = String::new();
-            for seg in path.split(['+', '.']) {
-                if acc.is_empty() {
-                    acc = seg.to_string();
-                } else {
-                    acc = format!("{}.{}", acc, seg);
-                }
-                let idx = cur.iter().position(|n| n.path == acc);
-                match idx {
-                    Some(i) => {
-                        cur[i].expanded = true;
-                        cur = &mut cur[i].children;
+        if !self.filter.is_empty() {
+            // filter active: reveal every surviving branch so matches are
+            // immediately visible (mirrors halshow's openTreePath-on-hit)
+            set_all_expanded(&mut self.roots, true);
+        } else {
+            // no filter: restore the previously expanded state
+            let reopen = |path: &str, roots: &mut Vec<TreeNode>| {
+                let mut cur = roots;
+                let mut acc = String::new();
+                for seg in path.split(['+', '.']) {
+                    acc = if acc.is_empty() {
+                        seg.to_string()
+                    } else {
+                        format!("{}.{}", acc, seg)
+                    };
+                    let idx = cur.iter().position(|n| n.path == acc);
+                    match idx {
+                        Some(i) => {
+                            cur[i].expanded = true;
+                            cur = &mut cur[i].children;
+                        }
+                        None => break,
                     }
-                    None => break,
                 }
+            };
+            for p in &open {
+                reopen(p, &mut self.roots);
             }
-        };
-        for p in &open {
-            reopen(p);
         }
         // keep selection if it still exists
         if !self.path_exists(&self.selected) {

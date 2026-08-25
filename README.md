@@ -15,7 +15,8 @@ with any installed LinuxCNC and needs nothing but `halcmd` on `$PATH`.
 ## Features
 
 - **Tree view** of Components / Pins / Parameters / Signals / Functions /
-  Threads, with live regex filtering (per-segment or full-path).
+  Threads, with live regex filtering (per-segment or full-path) that
+  auto-reveals matching branches.
 - **SHOW tab** — `hal show` output for any node, plus an arbitrary
   `halcmd` command entry with history.
 - **WATCH tab** — watchlist of pins/signals/parameters with polled values

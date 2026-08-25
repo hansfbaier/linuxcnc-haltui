@@ -993,6 +993,9 @@ impl App {
                         self.tree_set_expanded(&n.path, true);
                     } else if let Some(first) = n.children.first() {
                         self.tree.selected = first.path.clone();
+                    } else {
+                        // leaf has no children: hand focus to the right panel
+                        self.focus_content();
                     }
                 }
             }

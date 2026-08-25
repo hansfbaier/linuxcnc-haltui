@@ -94,7 +94,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         }
         (_, Some(_)) => " Enter ok | Esc cancel | Ctrl+U clear | F1 help ".to_string(),
         (Focus::Tree, None) => {
-            " ↑↓ nav | → expand | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
+            " ↑↓ nav | → expand / leaf→panel | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
              s show | e/w expand/collapse all | E/W this type | / filter | f full-path | r reload | \
              F2 tree | [ ] resize ".to_string()
         }
@@ -578,7 +578,7 @@ GLOBAL
 
 TREE PANEL
   ↑ ↓                 move selection
-  →                   expand node / enter first child
+  →                   expand node / enter child / leaf→right panel
   ←                   collapse node / go to parent
   Space               toggle expand
   Enter               open node in SHOW tab (or add to watch in WATCH tab)

@@ -71,7 +71,8 @@ Full list is in-app: press `F1` or `?` (self-documenting). Summary:
 | `F5` | open / close the settings screen |
 | `[` `]` | shrink / grow tree panel |
 
-**Tree:** `↑↓` move, `→←` expand/collapse, `Space` toggle, `Enter` show or
+**Tree:** `↑↓` move, `→` expand / enter child (on a leaf: jump to the
+right panel), `←` collapse / parent, `Space` toggle, `Enter` show or
 add-to-watch, `a` add leaf, `A` add subtree, `s` show in SHOW, `e`/`w`
 expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
 

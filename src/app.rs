@@ -49,12 +49,45 @@ pub enum InputAction {
     SetSetting(usize),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
+    Text,
+    BitPick,
+}
+
 #[derive(Debug)]
 pub struct InputState {
+    pub kind: InputKind,
     pub prompt: String,
     pub buffer: String,
     pub cursor: usize,
+    /// selected radio in BitPick mode
+    pub bit_value: bool,
     pub action: InputAction,
+}
+
+impl InputState {
+    fn text(prompt: impl Into<String>, buffer: String, action: InputAction) -> Self {
+        InputState {
+            kind: InputKind::Text,
+            prompt: prompt.into(),
+            cursor: buffer.chars().count(),
+            buffer,
+            bit_value: false,
+            action,
+        }
+    }
+
+    fn bit_pick(prompt: impl Into<String>, bit_value: bool, action: InputAction) -> Self {
+        InputState {
+            kind: InputKind::BitPick,
+            prompt: prompt.into(),
+            buffer: String::new(),
+            cursor: 0,
+            bit_value,
+            action,
+        }
+    }
 }
 
 pub struct App {
@@ -516,13 +549,11 @@ impl App {
             .join(&self.last_watch_tail)
             .to_string_lossy()
             .into_owned();
-        let cursor = def.len();
-        self.input = Some(InputState {
-            prompt: prompt.to_string(),
-            buffer: def,
-            cursor,
-            action: InputAction::SaveWatchFile(multiline),
-        });
+        self.input = Some(InputState::text(
+            prompt.to_string(),
+            def,
+            InputAction::SaveWatchFile(multiline),
+        ));
     }
 
     pub fn save_watch_file(&mut self, path: &str, multiline: bool) {
@@ -748,39 +779,72 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.input = None;
+                return;
             }
             KeyCode::Enter => {
                 let input = self.input.take().unwrap();
                 let action = input.action;
-                let buffer = input.buffer;
+                let buffer = match input.kind {
+                    InputKind::Text => input.buffer,
+                    InputKind::BitPick => {
+                        if input.bit_value {
+                            "1".to_string()
+                        } else {
+                            "0".to_string()
+                        }
+                    }
+                };
                 self.apply_action(action, &buffer);
-            }
-            KeyCode::Left => input.cursor = input.cursor.saturating_sub(1),
-            KeyCode::Right => input.cursor = (input.cursor + 1).min(input.buffer.chars().count()),
-            KeyCode::Home => input.cursor = 0,
-            KeyCode::End => input.cursor = input.buffer.chars().count(),
-            KeyCode::Backspace => {
-                if input.cursor > 0 {
-                    input.cursor -= 1;
-                    remove_char_at(&mut input.buffer, input.cursor);
-                }
-            }
-            KeyCode::Delete => remove_char_at(&mut input.buffer, input.cursor),
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                input.buffer.clear();
-                input.cursor = 0;
-            }
-            KeyCode::Char(c) => {
-                let pos = input
-                    .buffer
-                    .char_indices()
-                    .nth(input.cursor)
-                    .map(|(i, _)| i)
-                    .unwrap_or(input.buffer.len());
-                input.buffer.insert(pos, c);
-                input.cursor += 1;
+                return;
             }
             _ => {}
+        }
+        match input.kind {
+            InputKind::BitPick => match key.code {
+                KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Tab
+                | KeyCode::BackTab => input.bit_value = !input.bit_value,
+                KeyCode::Char('t') | KeyCode::Char('T') | KeyCode::Char('1') => {
+                    input.bit_value = true
+                }
+                KeyCode::Char('f') | KeyCode::Char('F') | KeyCode::Char('0') => {
+                    input.bit_value = false
+                }
+                _ => {}
+            },
+            InputKind::Text => match key.code {
+                KeyCode::Left => input.cursor = input.cursor.saturating_sub(1),
+                KeyCode::Right => {
+                    input.cursor = (input.cursor + 1).min(input.buffer.chars().count())
+                }
+                KeyCode::Home => input.cursor = 0,
+                KeyCode::End => input.cursor = input.buffer.chars().count(),
+                KeyCode::Backspace => {
+                    if input.cursor > 0 {
+                        input.cursor -= 1;
+                        remove_char_at(&mut input.buffer, input.cursor);
+                    }
+                }
+                KeyCode::Delete => remove_char_at(&mut input.buffer, input.cursor),
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    input.buffer.clear();
+                    input.cursor = 0;
+                }
+                KeyCode::Char(c) => {
+                    let pos = input
+                        .buffer
+                        .char_indices()
+                        .nth(input.cursor)
+                        .map(|(i, _)| i)
+                        .unwrap_or(input.buffer.len());
+                    input.buffer.insert(pos, c);
+                    input.cursor += 1;
+                }
+                _ => {}
+            },
         }
     }
 
@@ -1102,15 +1166,20 @@ impl App {
                 }
                 let w = &self.watch[idx];
                 if w.writable == 1 {
-                    let def = w.value.clone();
                     let label = w.name.clone();
-                    let cursor = def.len();
-                    self.input = Some(InputState {
-                        prompt: format!("Set {label}"),
-                        buffer: def,
-                        cursor,
-                        action: InputAction::SetValue(idx),
-                    });
+                    if w.dtype == "bit" {
+                        self.input = Some(InputState::bit_pick(
+                            format!("Set {label} (bit)"),
+                            w.value == "TRUE",
+                            InputAction::SetValue(idx),
+                        ));
+                    } else {
+                        self.input = Some(InputState::text(
+                            format!("Set {label}"),
+                            w.value.clone(),
+                            InputAction::SetValue(idx),
+                        ));
+                    }
                 } else if w.writable == -1 {
                     self.watch_unlink(idx);
                 }
@@ -1150,12 +1219,11 @@ impl App {
             KeyCode::Char('r') => self.reload_watch(),
             KeyCode::Char('e') => self.watch_erase(),
             KeyCode::Char('a') => {
-                self.input = Some(InputState {
-                    prompt: "Add to watch (pin/param/sig name)".to_string(),
-                    buffer: String::new(),
-                    cursor: 0,
-                    action: InputAction::AddWatch,
-                });
+                self.input = Some(InputState::text(
+                    "Add to watch (pin/param/sig name)",
+                    String::new(),
+                    InputAction::AddWatch,
+                ));
             }
             KeyCode::Char('o') => {
                 let Some(idx) = self.watch_state.selected() else {
@@ -1180,13 +1248,11 @@ impl App {
                     .join(&self.last_watch_tail)
                     .to_string_lossy()
                     .into_owned();
-                let cursor = def.len();
-                self.input = Some(InputState {
-                    prompt: "Load a watch list".to_string(),
-                    buffer: def,
-                    cursor,
-                    action: InputAction::LoadWatchFile,
-                });
+                self.input = Some(InputState::text(
+                    "Load a watch list",
+                    def,
+                    InputAction::LoadWatchFile,
+                ));
             }
             KeyCode::Char('S') => {
                 self.save_watch_prompt(false);
@@ -1212,12 +1278,11 @@ impl App {
                         2 => self.prefs.ffmts.clone(),
                         _ => self.prefs.ifmts.clone(),
                     };
-                    self.input = Some(InputState {
-                        prompt: "Edit setting".to_string(),
-                        buffer: def.clone(),
-                        cursor: def.len(),
-                        action: InputAction::SetSetting(sel),
-                    });
+                    self.input = Some(InputState::text(
+                        "Edit setting",
+                        def.clone(),
+                        InputAction::SetSetting(sel),
+                    ));
                 }
                 4 => {
                     // remember watchlist toggle

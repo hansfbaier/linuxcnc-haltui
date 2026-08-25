@@ -75,6 +75,10 @@ def expect(name, cond):
 
 def main():
     ok = True
+    # ensure the harmless math fixture component is present (idempotent;
+    # the test only reads/writes abs.0.*, never machine pins)
+    subprocess.run(["halcmd", "loadrt", "abs"], capture_output=True)
+    time.sleep(0.6)
     h = Haltui(args=["--noprefs"])
     h.pump(1.2)
     ok &= expect("SHOW tab initial", "HAL show output" in h.screen())

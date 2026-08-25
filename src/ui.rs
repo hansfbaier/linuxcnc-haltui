@@ -8,7 +8,7 @@ use ratatui::widgets::{
     ScrollbarState, Table, Tabs, Wrap,
 };
 
-use crate::app::{App, Focus, Tab};
+use crate::app::{App, Focus, InputKind, Tab};
 use crate::hal::HalType;
 use crate::tree::{self, TreeNode};
 use crate::watch::WatchItem;
@@ -88,27 +88,30 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
-    let hints = match (&app.focus, &app.input.is_some()) {
-        (_, true) => " Enter ok | Esc cancel | Ctrl+U clear | F1 help ".to_string(),
-        (Focus::Tree, _) => {
+    let hints = match (&app.focus, app.input.as_ref()) {
+        (_, Some(input)) if input.kind == InputKind::BitPick => {
+            " ←→ / ↑↓ toggle | t/f or 1/0 pick | Enter set | Esc cancel ".to_string()
+        }
+        (_, Some(_)) => " Enter ok | Esc cancel | Ctrl+U clear | F1 help ".to_string(),
+        (Focus::Tree, None) => {
             " ↑↓ nav | → expand | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
              s show | e/w expand/collapse all | E/W this type | / filter | f full-path | r reload | \
              F2 tree | [ ] resize ".to_string()
         }
-        (Focus::Filter, _) => {
+        (Focus::Filter, None) => {
             " type = regex filter (live) | f full-path | Ctrl+U clear | Esc/Enter done ".to_string()
         }
-        (Focus::ShowText, _) => {
+        (Focus::ShowText, None) => {
             " ← tree | ↑↓/PgUp/PgDn scroll | a add shown to watch | c command | F3 content | F4 command ".to_string()
         }
-        (Focus::Command, _) => {
+        (Focus::Command, None) => {
             " ← tree | Enter run halcmd | ↑↓ history | Esc back | Ctrl+U clear ".to_string()
         }
-        (Focus::Watch, _) => {
+        (Focus::Watch, None) => {
             " ← tree | ↑↓ sel | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
              a add | o show in tree | S save | m save multiline | L load ".to_string()
         }
-        (Focus::Settings, _) => {
+        (Focus::Settings, None) => {
             " ← close + tree | Esc/F5 close | ↑↓ sel | Enter edit/toggle | Apply = Enter on last row ".to_string()
         }
     };
@@ -464,8 +467,10 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
     let area = f.area();
-    let w = (area.width * 3 / 4).min(90);
-    let h = 5;
+    let (w, h) = match input.kind {
+        InputKind::BitPick => ((area.width * 3 / 4).min(60), 7),
+        InputKind::Text => ((area.width * 3 / 4).min(90), 5),
+    };
     let rect = Rect {
         x: (area.width.saturating_sub(w)) / 2,
         y: (area.height.saturating_sub(h)) / 2,
@@ -479,20 +484,78 @@ fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
             .style(Style::default().bg(Color::Black)),
         rect,
     );
-    let inner = Rect {
-        x: rect.x + 2,
-        y: rect.y + 2,
-        width: rect.width - 4,
-        height: 1,
-    };
-    let mut text = input.buffer.clone();
-    text.push(' ');
-    let cursor_x = input.cursor.min(inner.width.saturating_sub(1) as usize);
-    f.render_widget(
-        Paragraph::new(Span::styled(text, Style::default().fg(Color::White))),
-        inner,
-    );
-    f.set_cursor_position(Position::new(inner.x + cursor_x as u16, inner.y));
+    match input.kind {
+        InputKind::BitPick => {
+            let sel = Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD);
+            let unsel = Style::default().fg(Color::Gray);
+            let row = |f: &mut Frame, y: u16, mark: &str, label: &str, style: Style| {
+                let r = Rect {
+                    x: rect.x + 4,
+                    y: rect.y + y,
+                    width: rect.width.saturating_sub(6),
+                    height: 1,
+                };
+                f.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(mark, style),
+                        Span::raw(" "),
+                        Span::styled(label, style),
+                    ])),
+                    r,
+                );
+            };
+            let (t_style, f_style) = if input.bit_value {
+                (sel, unsel)
+            } else {
+                (unsel, sel)
+            };
+            row(
+                f,
+                1,
+                if input.bit_value { "(•)" } else { "( )" },
+                "TRUE",
+                t_style,
+            );
+            row(
+                f,
+                2,
+                if !input.bit_value { "(•)" } else { "( )" },
+                "FALSE",
+                f_style,
+            );
+            let hint = Rect {
+                x: rect.x + 2,
+                y: rect.y + 4,
+                width: rect.width.saturating_sub(4),
+                height: 1,
+            };
+            f.render_widget(
+                Paragraph::new(Span::styled(
+                    " ←→ / ↑↓ toggle   t/f or 1/0 pick   Enter set   Esc cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                hint,
+            );
+        }
+        InputKind::Text => {
+            let inner = Rect {
+                x: rect.x + 2,
+                y: rect.y + 2,
+                width: rect.width - 4,
+                height: 1,
+            };
+            let mut text = input.buffer.clone();
+            text.push(' ');
+            let cursor_x = input.cursor.min(inner.width.saturating_sub(1) as usize);
+            f.render_widget(
+                Paragraph::new(Span::styled(text, Style::default().fg(Color::White))),
+                inner,
+            );
+            f.set_cursor_position(Position::new(inner.x + cursor_x as u16, inner.y));
+        }
+    }
 }
 
 // ----------------------------------------------------------------
@@ -574,7 +637,13 @@ SETTINGS SCREEN (F5)
 INPUT PROMPT
   Enter               confirm
   Esc                 cancel
-  Ctrl+U              clear
+  Ctrl+U              clear (text inputs)
+
+BIT VALUE DIALOG (writable bit pin/param/signal, Enter on a watch row)
+  ←→ / ↑↓            toggle TRUE / FALSE
+  t / f, 1 / 0       pick TRUE / FALSE directly
+  Enter               set the chosen value
+  Esc                 cancel
 
 FILES
   Preferences:  $CONFIG_DIR/halshow.preferences, or the directory of the

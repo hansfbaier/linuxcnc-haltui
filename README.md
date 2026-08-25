@@ -79,9 +79,10 @@ expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
 
 **SHOW:** `↑↓ PgUp PgDn Home` scroll, `a` add shown item, `c` focus command.
 
-**WATCH:** `↑↓` select, `Enter` set value, `s`/`c` set/clear bit, `u`
-unlink, `x` remove, `r` reload, `e` erase, `a` add by name, `o` show in
-tree, `S` save (oneline), `m` save (multiline), `L` load.
+**WATCH:** `↑↓` select, `Space` toggle a writable bit, `Enter` set value,
+`s`/`c` set/clear bit, `u` unlink, `x` remove, `r` reload, `e` erase,
+`a` add by name, `o` show in tree, `S` save (oneline), `m` save
+(multiline), `L` load.
 
 **Settings screen:** `↑↓` select field, `Enter`/`Space` edit or toggle,
 `Esc`/`F5` close, `←` close + back to tree.

@@ -108,7 +108,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
             " ← tree | Enter run halcmd | ↑↓ history | Esc back | Ctrl+U clear ".to_string()
         }
         (Focus::Watch, None) => {
-            " ← tree | ↑↓ sel | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
+            " ← tree | ↑↓ sel | Space toggle bit | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
              a add | o show in tree | S save | m save multiline | L load ".to_string()
         }
         (Focus::Settings, None) => {
@@ -614,6 +614,7 @@ HAL COMMAND ENTRY
 WATCH TAB
   ←                   back to tree view
   ↑ ↓                 select item
+  Space               toggle a writable bit value
   Enter               set value (writable items); unlink (linked items)
   s / c               set bit to 1 / clear bit to 0
   u                   unlink pin from signal

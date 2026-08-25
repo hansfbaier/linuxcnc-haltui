@@ -1250,6 +1250,21 @@ impl App {
                     self.watch_set(idx, "0");
                 }
             }
+            KeyCode::Char(' ') => {
+                let Some(idx) = self.watch_state.selected() else {
+                    return;
+                };
+                if idx < self.watch.len() {
+                    let (writable, dtype, value) = {
+                        let w = &self.watch[idx];
+                        (w.writable, w.dtype.clone(), w.value.clone())
+                    };
+                    if writable == 1 && dtype == "bit" {
+                        let new_val = if value == "TRUE" { "0" } else { "1" };
+                        self.watch_set(idx, new_val);
+                    }
+                }
+            }
             KeyCode::Char('u') => {
                 if let Some(idx) = self.watch_state.selected() {
                     self.watch_unlink(idx);

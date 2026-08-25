@@ -77,8 +77,8 @@ Full list is in-app: press `F1` or `?` (self-documenting). Summary:
 | `[` `]` | shrink / grow tree panel |
 
 **Tree:** `↑↓` move (with SHOW tab active, the pane live-previews the
-selection), `→` expand / enter child (on a leaf: jump to the
-right panel), `←` collapse / parent, `Space` toggle, `Enter` show or
+selection), `→` expand a closed node / else jump to the right panel,
+`←` collapse / parent, `Space` toggle, `Enter` show or
 add-to-watch, `a` add leaf, `A` add subtree, `s` show in SHOW, `e`/`w`
 expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
 

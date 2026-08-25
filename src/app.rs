@@ -1017,22 +1017,17 @@ impl App {
                 self.preview_selection();
             }
             KeyCode::Right => {
-                let mut moved = false;
-                if let Some(n) = self.tree.selected_node().cloned() {
-                    if !n.expanded && n.is_branch() {
-                        self.tree_set_expanded(&n.path, true);
-                    } else if let Some(first) = n.children.first() {
-                        self.tree.selected = first.path.clone();
-                        moved = true;
-                    } else {
-                        // leaf has no children: preview it, then hand focus
-                        // to the right panel
-                        self.preview_selection();
-                        self.focus_content();
-                    }
-                }
-                if moved {
+                let Some(n) = self.tree.selected_node().cloned() else {
+                    return;
+                };
+                if !n.expanded && n.is_branch() {
+                    // closed parent: expand it in place
+                    self.tree_set_expanded(&n.path, true);
+                } else {
+                    // already expanded (branch or leaf): hand focus to the
+                    // right panel
                     self.preview_selection();
+                    self.focus_content();
                 }
             }
             KeyCode::Left => {

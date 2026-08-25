@@ -1,0 +1,15 @@
+[package]
+name = "haltui"
+version = "0.1.0"
+edition = "2021"
+description = "Text user interface port of the LinuxCNC halshow command"
+license = "GPL-2.0"
+
+[dependencies]
+ratatui = "0.30.2"
+crossterm = "0.29"
+regex = "1"
+libc = "0.2"
+
+[profile.release]
+lto = true

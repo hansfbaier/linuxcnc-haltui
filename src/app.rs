@@ -1,0 +1,1266 @@
+//! Application state, event loop and key handling.
+
+use std::io;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::backend::Backend;
+use ratatui::widgets::{ListState, TableState};
+use ratatui::Terminal;
+
+use crate::fmt::{self, FmtArg};
+use crate::hal::{self, HalSession, HalType};
+use crate::prefs::{self, Prefs, Workmode};
+use crate::tree::{self, HalTree};
+use crate::ui;
+use crate::watch::WatchItem;
+
+pub struct Cli {
+    pub fformat: Option<String>,
+    pub iformat: Option<String>,
+    pub noprefs: bool,
+    pub interval: Option<u64>,
+    pub watchfile: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tab {
+    Show,
+    Watch,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Focus {
+    Tree,
+    Filter,
+    ShowText,
+    Command,
+    Watch,
+    Settings,
+}
+
+#[derive(Debug)]
+pub enum InputAction {
+    SetValue(usize),
+    AddWatch,
+    LoadWatchFile,
+    SaveWatchFile(bool),
+    SetSetting(usize),
+}
+
+#[derive(Debug)]
+pub struct InputState {
+    pub prompt: String,
+    pub buffer: String,
+    pub cursor: usize,
+    pub action: InputAction,
+}
+
+pub struct App {
+    pub hal: HalSession,
+    pub prefs: Prefs,
+    pub prefs_path: PathBuf,
+    pub prefs_dir: Option<PathBuf>,
+    pub use_prefs: bool,
+    pub ffmt_override: Option<String>,
+    pub ifmt_override: Option<String>,
+
+    pub tree: HalTree,
+    pub tree_list: ListState,
+    pub watch: Vec<WatchItem>,
+    pub watch_state: TableState,
+    pub settings_state: ListState,
+
+    pub tab: Tab,
+    pub settings_open: bool,
+    pub focus: Focus,
+    pub input: Option<InputState>,
+
+    pub show_text: String,
+    pub show_scroll: usize,
+    pub shown_node: Option<(HalType, String)>,
+
+    pub command: String,
+    pub hist: Vec<String>,
+    pub hist_idx: Option<usize>,
+
+    pub status: String,
+    pub status_err: bool,
+    pub help: bool,
+    pub help_scroll: usize,
+    pub quit: bool,
+
+    pub last_watch_dir: PathBuf,
+    pub last_watch_tail: String,
+    pub title: String,
+
+    last_tick: Instant,
+}
+
+impl App {
+    pub fn new(cli: &Cli) -> Self {
+        let (prefs_path, prefs_dir) = prefs::locate();
+        let prefs = if cli.noprefs {
+            Prefs::default()
+        } else {
+            prefs::read(&prefs_path)
+        };
+        let interval = cli.interval.unwrap_or(prefs.watch_interval).max(20);
+        let (tab, settings_open) = match prefs.workmode {
+            Workmode::Watch => (Tab::Watch, false),
+            Workmode::Settings => (Tab::Show, true),
+            Workmode::Show => (Tab::Show, false),
+        };
+        let mut app = App {
+            hal: HalSession::new(),
+            prefs,
+            prefs_path,
+            prefs_dir,
+            use_prefs: !cli.noprefs,
+            ffmt_override: cli.fformat.clone(),
+            ifmt_override: cli.iformat.clone(),
+            tree: HalTree::new(),
+            tree_list: ListState::default(),
+            watch: Vec::new(),
+            watch_state: TableState::default(),
+            settings_state: ListState::default(),
+            tab,
+            settings_open,
+            focus: Focus::Tree,
+            input: None,
+            show_text: String::new(),
+            show_scroll: 0,
+            shown_node: None,
+            command: String::new(),
+            hist: Vec::new(),
+            hist_idx: None,
+            status: "Commands may be tested here but they will NOT be saved".to_string(),
+            status_err: false,
+            help: false,
+            help_scroll: 0,
+            quit: false,
+            last_watch_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            last_watch_tail: "my.halshow".to_string(),
+            title: "Halshow".to_string(),
+            last_tick: Instant::now(),
+        };
+        app.prefs.watch_interval = interval;
+        app
+    }
+
+    /// Initial HAL/tree/watchlist load.
+    pub fn startup(&mut self, cli: &Cli) {
+        self.hal.ensure();
+        if let Some(f) = &cli.watchfile {
+            if Path::new(f).is_file() {
+                self.load_watch_file(f);
+            } else {
+                self.set_status(format!("Cannot read file <{f}>"), true);
+            }
+        } else if self.use_prefs && self.prefs.auto_save_watchlist {
+            let saved: Vec<(Option<HalType>, String)> = self
+                .prefs
+                .watchlist
+                .iter()
+                .map(|s| match s.split_once('+') {
+                    Some((k, n)) => (HalType::from_kw(k), n.to_string()),
+                    None => (None, s.clone()),
+                })
+                .collect();
+            for (kind, name) in saved {
+                match kind {
+                    Some(k) => {
+                        self.watch_add(k, &name, false);
+                    }
+                    None => {
+                        if let Some(k) = self.guess_kind(&name) {
+                            self.watch_add(k, &name, false);
+                        }
+                    }
+                }
+            }
+        }
+        self.tree.rebuild(&self.hal);
+        if self.tab == Tab::Watch {
+            self.poll_watch();
+        }
+    }
+
+    pub fn set_status(&mut self, msg: String, err: bool) {
+        self.status = msg;
+        self.status_err = err;
+    }
+
+    /// Poll watch values when the interval elapsed.
+    pub fn poll_if_due(&mut self) {
+        if self.last_tick.elapsed() >= Duration::from_millis(self.prefs.watch_interval.max(20)) {
+            self.last_tick = Instant::now();
+            if self.tab == Tab::Watch {
+                self.poll_watch();
+            }
+        }
+    }
+
+    /// Next tick deadline base (for the main loop).
+    pub fn last_tick_instant(&self) -> Instant {
+        self.last_tick
+    }
+
+    pub fn shutdown(&mut self) {
+        if self.use_prefs {
+            self.prefs.workmode = if self.settings_open {
+                Workmode::Settings
+            } else {
+                match self.tab {
+                    Tab::Show => Workmode::Show,
+                    Tab::Watch => Workmode::Watch,
+                }
+            };
+            if self.prefs.auto_save_watchlist {
+                self.prefs.watchlist = self.watch.iter().map(|w| w.file_id()).collect();
+            }
+            if let Err(e) = prefs::write(&self.prefs_path, &self.prefs) {
+                eprintln!(
+                    "haltui: unable to save settings to {}: {e}",
+                    self.prefs_path.display()
+                );
+            }
+        }
+        self.hal.kill();
+    }
+
+    // ------------------------------------------------------------
+    // Watch list operations
+
+    fn guess_kind(&mut self, name: &str) -> Option<HalType> {
+        // pin/param via ptype, else sig via stype
+        let p = self.hal.batch(&[format!("ptype {name}")]).pop()?;
+        if !p.err {
+            return Some(HalType::Pin); // could be a param; ptype covers both
+        }
+        let s = self.hal.batch(&[format!("stype {name}")]).pop()?;
+        if !s.err {
+            return Some(HalType::Sig);
+        }
+        None
+    }
+
+    fn dtype_of(&mut self, kind: HalType, name: &str) -> Result<String, String> {
+        let cmd = match kind {
+            HalType::Sig => format!("stype {name}"),
+            _ => format!("ptype {name}"),
+        };
+        let out = self.hal.batch(&[cmd]);
+        match out.first() {
+            Some(o) if !o.err => Ok(o.line.clone()),
+            Some(o) => Err(o.line.clone()),
+            None => Err("halcmd unavailable".to_string()),
+        }
+    }
+
+    fn writable_of(&mut self, kind: HalType, name: &str) -> i8 {
+        let show = self.hal.show(kind, name);
+        match kind {
+            HalType::Pin => hal::pin_writable(&show, name),
+            HalType::Param => hal::param_writable(&show, name),
+            HalType::Sig => hal::sig_writable(&show),
+            _ => 0,
+        }
+    }
+
+    /// Add item to watch list. Returns true on success.
+    pub fn watch_add(&mut self, kind: HalType, name: &str, verbose: bool) -> bool {
+        if !kind.watchable() {
+            if verbose {
+                self.set_status(format!("cannot watch {}s", kind.kw()), true);
+            }
+            return false;
+        }
+        if self.watch.iter().any(|w| w.kind == kind && w.name == name) {
+            if verbose {
+                self.set_status(format!("'{name}' already in list"), true);
+            }
+            return false;
+        }
+        let dtype = match self.dtype_of(kind, name) {
+            Ok(d) => d,
+            Err(e) => {
+                if verbose {
+                    self.set_status(format!("'{name}': {e}"), true);
+                }
+                return false;
+            }
+        };
+        let writable = self.writable_of(kind, name);
+        self.watch.push(WatchItem {
+            kind,
+            name: name.to_string(),
+            dtype,
+            writable,
+            value: String::new(),
+            error: false,
+        });
+        if verbose {
+            self.set_status(format!("'{name}' added"), false);
+        }
+        true
+    }
+
+    fn poll_watch(&mut self) {
+        if self.watch.is_empty() {
+            return;
+        }
+        let cmds: Vec<String> = self
+            .watch
+            .iter()
+            .map(|w| match w.kind {
+                HalType::Sig => format!("gets {}", w.name),
+                _ => format!("getp {}", w.name),
+            })
+            .collect();
+        let outs = self.hal.batch(&cmds);
+        // format outside the borrow of self.watch
+        let formatted: Vec<(bool, String)> = self
+            .watch
+            .iter()
+            .zip(outs.iter())
+            .map(|(w, o)| {
+                if o.err {
+                    (true, "----".to_string())
+                } else {
+                    (false, self.format_value(&w.dtype, &o.line))
+                }
+            })
+            .collect();
+        for (w, (err, val)) in self.watch.iter_mut().zip(formatted) {
+            w.error = err;
+            w.value = val;
+        }
+    }
+
+    fn format_value(&self, dtype: &str, raw: &str) -> String {
+        if dtype == "bit" {
+            return raw.to_string();
+        }
+        let fmt_override = if dtype == "float" || dtype == "hal_float" {
+            self.ffmt_override.as_deref()
+        } else {
+            self.ifmt_override.as_deref()
+        };
+        if let Some(f) = fmt_override {
+            if let Ok(v) = raw.parse::<f64>() {
+                if dtype == "float" || dtype == "hal_float" {
+                    return fmt::apply(f, &FmtArg::Float(v));
+                }
+                return fmt::apply(f, &FmtArg::Int(v as i64));
+            }
+            return raw.to_string();
+        }
+        if dtype == "float" || dtype == "hal_float" {
+            if !self.prefs.ffmts.is_empty() {
+                if let Ok(v) = raw.parse::<f64>() {
+                    return fmt::apply(&self.prefs.ffmts, &FmtArg::Float(v));
+                }
+            }
+        } else if matches!(dtype, "s32" | "u32") && !self.prefs.ifmts.is_empty() {
+            if let Ok(v) = raw.parse::<i64>() {
+                return fmt::apply(&self.prefs.ifmts, &FmtArg::Int(v));
+            }
+        }
+        raw.to_string()
+    }
+
+    pub fn watch_set(&mut self, idx: usize, val: &str) {
+        if idx >= self.watch.len() {
+            return;
+        }
+        let (kind, name) = {
+            let w = &self.watch[idx];
+            (w.kind, w.name.clone())
+        };
+        let cmd = match kind {
+            HalType::Sig => "sets",
+            _ => "setp",
+        };
+        let out = HalSession::exec(&[cmd, &name, val]);
+        self.set_status(
+            out.trim().to_string(),
+            out.contains("ERROR") || out.contains("not found"),
+        );
+        self.poll_watch();
+    }
+
+    pub fn watch_unlink(&mut self, idx: usize) {
+        if idx >= self.watch.len() {
+            return;
+        }
+        let (kind, name) = {
+            let w = &self.watch[idx];
+            (w.kind, w.name.clone())
+        };
+        let out = HalSession::exec(&["unlinkp", &name]);
+        if out.contains("unlinked") {
+            self.set_status(format!("'{name}' unlinked"), false);
+            // re-detect writability
+            self.watch[idx].writable = self.writable_of(kind, &name);
+        } else {
+            self.set_status(out.trim().to_string(), true);
+        }
+    }
+
+    pub fn watch_remove(&mut self, idx: usize) {
+        if idx >= self.watch.len() {
+            return;
+        }
+        let name = self.watch[idx].name.clone();
+        self.watch.remove(idx);
+        if self
+            .watch_state
+            .selected()
+            .is_some_and(|s| s >= self.watch.len())
+            && !self.watch.is_empty()
+        {
+            self.watch_state.select(Some(self.watch.len() - 1));
+        }
+        self.set_status(format!("'{name}' removed from list"), false);
+    }
+
+    pub fn watch_erase(&mut self) {
+        self.watch.clear();
+        self.watch_state.select(None);
+        self.set_status("Watchlist cleared".to_string(), false);
+    }
+
+    pub fn reload_watch(&mut self) {
+        let items: Vec<(HalType, String)> = self
+            .watch
+            .iter()
+            .map(|w| (w.kind, w.name.clone()))
+            .collect();
+        self.watch.clear();
+        for (k, n) in items {
+            self.watch_add(k, &n, false);
+        }
+        self.poll_watch();
+    }
+
+    // ------------------------------------------------------------
+    // Watch file load/save
+
+    pub fn load_watch_file(&mut self, path: &str) {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) => {
+                self.set_status(format!("Cannot read <{path}>: {e}"), true);
+                return;
+            }
+        };
+        // backup auto-saved watchlist
+        let backup = self
+            .prefs_dir
+            .as_ref()
+            .map(|d| d.join(".halshow_watchlist_backup"));
+        if let Some(b) = &backup {
+            let _ = std::fs::write(b, crate::watch::file_text(&self.watch, true));
+        }
+        self.watch.clear();
+        self.watch_state.select(None);
+        for (kind, name) in crate::watch::parse_file(&text) {
+            match kind {
+                Some(k) => {
+                    self.watch_add(k, &name, false);
+                }
+                None => {
+                    if let Some(k) = self.guess_kind(&name) {
+                        self.watch_add(k, &name, false);
+                    }
+                }
+            }
+        }
+        self.tab = Tab::Watch;
+        self.focus = Focus::Watch;
+        let p = Path::new(path);
+        self.last_watch_tail = p
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string());
+        self.last_watch_dir = p
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.title = self.last_watch_tail.clone();
+        let backup_note = match &backup {
+            Some(b) => format!(", saved backup for old watchlist in {}", b.display()),
+            None => String::new(),
+        };
+        self.set_status(
+            format!("{} loaded{backup_note}", self.last_watch_tail),
+            false,
+        );
+        self.poll_watch();
+    }
+
+    fn save_watch_prompt(&mut self, multiline: bool) {
+        if self.watch.is_empty() {
+            self.set_status("Watchlist empty, nothing to save".to_string(), true);
+            return;
+        }
+        let prompt = if multiline {
+            "Save current watch list (multiline)"
+        } else {
+            "Save current watch list"
+        };
+        let def = self
+            .last_watch_dir
+            .join(&self.last_watch_tail)
+            .to_string_lossy()
+            .into_owned();
+        let cursor = def.len();
+        self.input = Some(InputState {
+            prompt: prompt.to_string(),
+            buffer: def,
+            cursor,
+            action: InputAction::SaveWatchFile(multiline),
+        });
+    }
+
+    pub fn save_watch_file(&mut self, path: &str, multiline: bool) {
+        let text = crate::watch::file_text(&self.watch, multiline);
+        if let Err(e) = std::fs::write(path, text) {
+            self.set_status(format!("Cannot write <{path}>: {e}"), true);
+            return;
+        }
+        let p = Path::new(path);
+        self.last_watch_tail = p
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string());
+        self.last_watch_dir = p
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.title = self.last_watch_tail.clone();
+        self.set_status(format!("{} saved", self.last_watch_tail), false);
+    }
+
+    // ------------------------------------------------------------
+    // SHOW tab
+
+    pub fn show_node(&mut self, kind: HalType, name: &str) {
+        self.shown_node = Some((kind, name.to_string()));
+        self.show_text = self.hal.show(kind, name);
+        self.show_scroll = 0;
+    }
+
+    fn run_command(&mut self) {
+        let cmd = self.command.trim().to_string();
+        self.command.clear();
+        self.hist_idx = None;
+        if cmd.is_empty() {
+            return;
+        }
+        if self.hist.last() != Some(&cmd) {
+            self.hist.push(cmd.clone());
+        }
+        let toks = hal::tokenize(&cmd);
+        let args: Vec<&str> = toks.iter().map(|s| s.as_str()).collect();
+        self.show_text = HalSession::exec(&args);
+        self.show_scroll = 0;
+    }
+
+    fn cmd_history(&mut self, dir: i32) {
+        if self.hist.is_empty() {
+            return;
+        }
+        let len = self.hist.len() as i32;
+        let idx = match self.hist_idx {
+            None => {
+                if dir < 0 {
+                    len - 1
+                } else {
+                    return;
+                }
+            }
+            Some(i) => (i as i32 + dir).clamp(0, len - 1),
+        };
+        self.hist_idx = Some(idx as usize);
+        self.command = self.hist[idx as usize].clone();
+    }
+
+    // ------------------------------------------------------------
+    // Key handling
+
+    pub fn on_key(&mut self, key: KeyEvent) {
+        // help overlay swallows everything but its own keys
+        if self.help {
+            match key.code {
+                KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?') => self.help = false,
+                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                KeyCode::Down => self.help_scroll += 1,
+                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                KeyCode::PageDown => self.help_scroll += 10,
+                _ => {}
+            }
+            return;
+        }
+        // input prompt swallows everything
+        if self.input.is_some() {
+            self.on_input_key(key);
+            return;
+        }
+        // F1 opens help from anywhere
+        if key.code == KeyCode::F(1) {
+            self.help = true;
+            self.help_scroll = 0;
+            return;
+        }
+        // settings screen is a full-screen mode, not a tab
+        if self.settings_open {
+            match key.code {
+                KeyCode::F(5) | KeyCode::Esc => self.close_settings(),
+                KeyCode::Left => {
+                    self.settings_open = false;
+                    self.focus = Focus::Tree;
+                }
+                _ => self.on_settings_key(key),
+            }
+            return;
+        }
+        match self.focus {
+            Focus::Filter => {
+                self.on_filter_key(key);
+                return;
+            }
+            Focus::Command => {
+                self.on_command_key(key);
+                return;
+            }
+            _ => {}
+        }
+        // global keys
+        match key.code {
+            KeyCode::Char('q') => {
+                self.quit = true;
+                return;
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.quit = true;
+                return;
+            }
+            KeyCode::Char('?') => {
+                self.help = true;
+                self.help_scroll = 0;
+                return;
+            }
+            KeyCode::Tab => {
+                self.next_tab();
+                return;
+            }
+            KeyCode::BackTab => {
+                self.prev_tab();
+                return;
+            }
+            KeyCode::Char('1') => {
+                self.tab = Tab::Show;
+                self.focus = Focus::ShowText;
+                return;
+            }
+            KeyCode::Char('2') => {
+                self.tab = Tab::Watch;
+                self.focus = Focus::Watch;
+                return;
+            }
+            KeyCode::F(5) => {
+                self.open_settings();
+                return;
+            }
+            KeyCode::F(2) => {
+                self.focus = Focus::Tree;
+                return;
+            }
+            KeyCode::F(3) => {
+                self.focus_content();
+                return;
+            }
+            KeyCode::F(4) => {
+                self.tab = Tab::Show;
+                self.focus = Focus::Command;
+                return;
+            }
+            KeyCode::Char('[') => {
+                self.prefs.ratio = (self.prefs.ratio - 0.05).clamp(0.12, 0.9);
+                return;
+            }
+            KeyCode::Char(']') => {
+                self.prefs.ratio = (self.prefs.ratio + 0.05).clamp(0.12, 0.9);
+                return;
+            }
+            _ => {}
+        }
+        match self.focus {
+            Focus::Tree => self.on_tree_key(key),
+            Focus::ShowText => self.on_show_key(key),
+            Focus::Watch => self.on_watch_key(key),
+            Focus::Settings => self.on_settings_key(key),
+            _ => {}
+        }
+    }
+
+    fn focus_content(&mut self) {
+        self.focus = match self.tab {
+            Tab::Show => Focus::ShowText,
+            Tab::Watch => Focus::Watch,
+        };
+    }
+
+    fn next_tab(&mut self) {
+        self.tab = match self.tab {
+            Tab::Show => Tab::Watch,
+            Tab::Watch => Tab::Show,
+        };
+        self.focus_content();
+    }
+
+    fn prev_tab(&mut self) {
+        self.tab = match self.tab {
+            Tab::Show => Tab::Watch,
+            Tab::Watch => Tab::Show,
+        };
+        self.focus_content();
+    }
+
+    fn open_settings(&mut self) {
+        self.settings_open = true;
+        self.focus = Focus::Settings;
+        if self.settings_state.selected().is_none() {
+            self.settings_state.select(Some(0));
+        }
+    }
+
+    fn close_settings(&mut self) {
+        self.settings_open = false;
+        self.focus_content();
+    }
+
+    fn on_input_key(&mut self, key: KeyEvent) {
+        let Some(input) = &mut self.input else { return };
+        match key.code {
+            KeyCode::Esc => {
+                self.input = None;
+            }
+            KeyCode::Enter => {
+                let input = self.input.take().unwrap();
+                let action = input.action;
+                let buffer = input.buffer;
+                self.apply_action(action, &buffer);
+            }
+            KeyCode::Left => input.cursor = input.cursor.saturating_sub(1),
+            KeyCode::Right => input.cursor = (input.cursor + 1).min(input.buffer.chars().count()),
+            KeyCode::Home => input.cursor = 0,
+            KeyCode::End => input.cursor = input.buffer.chars().count(),
+            KeyCode::Backspace => {
+                if input.cursor > 0 {
+                    input.cursor -= 1;
+                    remove_char_at(&mut input.buffer, input.cursor);
+                }
+            }
+            KeyCode::Delete => remove_char_at(&mut input.buffer, input.cursor),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                input.buffer.clear();
+                input.cursor = 0;
+            }
+            KeyCode::Char(c) => {
+                let pos = input
+                    .buffer
+                    .char_indices()
+                    .nth(input.cursor)
+                    .map(|(i, _)| i)
+                    .unwrap_or(input.buffer.len());
+                input.buffer.insert(pos, c);
+                input.cursor += 1;
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_action(&mut self, action: InputAction, buffer: &str) {
+        match action {
+            InputAction::SetValue(idx) => {
+                self.watch_set(idx, buffer.trim());
+            }
+            InputAction::AddWatch => {
+                let text = buffer.trim().to_string();
+                let (kind, name) = match text.split_once('+') {
+                    Some((k, n)) => match HalType::from_kw(k) {
+                        Some(k) => (k, n.trim().to_string()),
+                        None => {
+                            let Some(k) = self.guess_kind(&text) else {
+                                self.set_status(
+                                    format!("'{text}': not a pin, param or signal"),
+                                    true,
+                                );
+                                return;
+                            };
+                            (k, text.clone())
+                        }
+                    },
+                    None => {
+                        let Some(k) = self.guess_kind(&text) else {
+                            self.set_status(format!("'{text}': not a pin, param or signal"), true);
+                            return;
+                        };
+                        (k, text.clone())
+                    }
+                };
+                self.watch_add(kind, &name, true);
+            }
+            InputAction::LoadWatchFile => {
+                let path = buffer.trim().to_string();
+                if !path.is_empty() {
+                    self.load_watch_file(&path);
+                }
+            }
+            InputAction::SaveWatchFile(multiline) => {
+                let path = buffer.trim().to_string();
+                if !path.is_empty() {
+                    self.save_watch_file(&path, multiline);
+                }
+            }
+            InputAction::SetSetting(idx) => {
+                self.apply_setting(idx, buffer.trim());
+            }
+        }
+    }
+
+    fn apply_setting(&mut self, idx: usize, val: &str) {
+        match idx {
+            0 => {
+                if let Ok(v) = val.parse::<u64>() {
+                    if v >= 1 {
+                        self.prefs.watch_interval = v;
+                        self.set_status(format!("Update interval set to {v} ms"), false);
+                        return;
+                    }
+                }
+                self.set_status("Value out of range (min 1 ms)".to_string(), true);
+            }
+            1 => {
+                if let Ok(v) = val.parse::<u16>() {
+                    self.prefs.col1_width = v.clamp(8, 120);
+                    self.set_status(
+                        format!("Column width set to {}", self.prefs.col1_width),
+                        false,
+                    );
+                    return;
+                }
+                self.set_status("Value out of range".to_string(), true);
+            }
+            2 => {
+                self.prefs.ffmts = val.to_string();
+                self.set_status("Float format set".to_string(), false);
+            }
+            3 => {
+                self.prefs.ifmts = val.to_string();
+                self.set_status("Integer format set".to_string(), false);
+            }
+            _ => {}
+        }
+    }
+
+    fn on_filter_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                self.focus = Focus::Tree;
+                self.tree.rebuild(&self.hal);
+            }
+            KeyCode::Char('f') => {
+                self.tree.full_path = !self.tree.full_path;
+                self.tree.rebuild(&self.hal);
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.tree.filter.clear();
+            }
+            KeyCode::Backspace => {
+                self.tree.filter.pop();
+                self.tree.rebuild(&self.hal);
+            }
+            KeyCode::Char(c) => {
+                self.tree.filter.push(c);
+                self.tree.rebuild(&self.hal);
+            }
+            _ => {}
+        }
+    }
+
+    fn on_command_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.focus = Focus::ShowText;
+            }
+            KeyCode::Left => {
+                self.focus = Focus::Tree;
+            }
+            KeyCode::Char('?') => {
+                self.help = true;
+                self.help_scroll = 0;
+            }
+            KeyCode::Enter => self.run_command(),
+            KeyCode::Up => self.cmd_history(-1),
+            KeyCode::Down => self.cmd_history(1),
+            KeyCode::Backspace => {
+                self.command.pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.command.clear();
+            }
+            KeyCode::Char(c) => self.command.push(c),
+            _ => {}
+        }
+    }
+
+    fn on_tree_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Up => self.tree_move(-1),
+            KeyCode::Down => self.tree_move(1),
+            KeyCode::Right => {
+                if let Some(n) = self.tree.selected_node().cloned() {
+                    if !n.expanded && n.is_branch() {
+                        self.tree_set_expanded(&n.path, true);
+                    } else if let Some(first) = n.children.first() {
+                        self.tree.selected = first.path.clone();
+                    }
+                }
+            }
+            KeyCode::Left => {
+                if let Some(n) = self.tree.selected_node().cloned() {
+                    if n.expanded && n.is_branch() {
+                        self.tree_set_expanded(&n.path, false);
+                    } else if let Some(parent) = tree::parent_path(&n.path) {
+                        self.tree.selected = parent;
+                    }
+                }
+            }
+            KeyCode::Char(' ') => {
+                if let Some(n) = self.tree.selected_node() {
+                    let path = n.path.clone();
+                    let expanded = n.expanded;
+                    self.tree_set_expanded(&path, !expanded);
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(n) = self.tree.selected_node() {
+                    let kind = n.kind;
+                    let name = tree::full_name(&n.path).unwrap_or(&n.name).to_string();
+                    let leaf = n.leaf;
+                    match self.tab {
+                        Tab::Show => self.show_node(kind, &name),
+                        Tab::Watch if leaf => {
+                            self.watch_add(kind, &name, true);
+                            self.poll_watch();
+                        }
+                        Tab::Watch => {
+                            self.set_status(
+                                format!("cannot watch non-leaf {} node", kind.kw()),
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+            KeyCode::Char('a') => {
+                if let Some(n) = self.tree.selected_node() {
+                    let kind = n.kind;
+                    let name = tree::full_name(&n.path).unwrap_or(&n.name).to_string();
+                    if n.leaf {
+                        self.watch_add(kind, &name, true);
+                    } else {
+                        self.set_status(format!("cannot watch non-leaf {} node", kind.kw()), true);
+                    }
+                }
+            }
+            KeyCode::Char('A') => {
+                if let Some(n) = self.tree.selected_node() {
+                    let path = n.path.clone();
+                    let leaves = tree::collect_leaves(&self.tree.roots, &path);
+                    let mut added = 0;
+                    for (kind, name) in leaves {
+                        if self.watch_add(kind, &name, false) {
+                            added += 1;
+                        }
+                    }
+                    self.set_status(format!("{added} item(s) added"), false);
+                }
+            }
+            KeyCode::Char('s') => {
+                if let Some(n) = self.tree.selected_node() {
+                    let kind = n.kind;
+                    let name = tree::full_name(&n.path).unwrap_or(&n.name).to_string();
+                    self.tab = Tab::Show;
+                    self.focus = Focus::ShowText;
+                    self.show_node(kind, &name);
+                }
+            }
+            KeyCode::Char('e') => self.tree.expand_all(),
+            KeyCode::Char('w') => self.tree.collapse_all(),
+            KeyCode::Char('E') => {
+                if let Some(n) = self.tree.selected_node() {
+                    let kind = n.kind;
+                    self.tree.expand_kind(kind);
+                }
+            }
+            KeyCode::Char('W') => {
+                if let Some(n) = self.tree.selected_node() {
+                    let kind = n.kind;
+                    self.tree.collapse_kind(kind);
+                }
+            }
+            KeyCode::Char('/') => {
+                self.focus = Focus::Filter;
+            }
+            KeyCode::Char('f') => {
+                self.tree.full_path = !self.tree.full_path;
+                self.tree.rebuild(&self.hal);
+            }
+            KeyCode::Char('r') => self.tree.rebuild(&self.hal),
+            _ => {}
+        }
+    }
+
+    fn tree_move(&mut self, delta: i32) {
+        let vis = tree::visible(&self.tree.roots);
+        let Some(cur) = vis.iter().position(|(p, _, _)| *p == self.tree.selected) else {
+            if let Some((p, _, _)) = vis.first() {
+                self.tree.selected = p.clone();
+            }
+            return;
+        };
+        let idx = (cur as i32 + delta).clamp(0, vis.len() as i32 - 1) as usize;
+        self.tree.selected = vis[idx].0.clone();
+    }
+
+    fn tree_set_expanded(&mut self, path: &str, value: bool) {
+        fn set(nodes: &mut [crate::tree::TreeNode], path: &str, value: bool) -> bool {
+            for n in nodes {
+                if n.path == path {
+                    n.expanded = value;
+                    return true;
+                }
+                if set(&mut n.children, path, value) {
+                    return true;
+                }
+            }
+            false
+        }
+        set(&mut self.tree.roots, path, value);
+    }
+
+    fn on_show_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Left => self.focus = Focus::Tree,
+            KeyCode::Up => self.show_scroll = self.show_scroll.saturating_sub(1),
+            KeyCode::Down => self.show_scroll += 1,
+            KeyCode::PageUp => self.show_scroll = self.show_scroll.saturating_sub(10),
+            KeyCode::PageDown => self.show_scroll += 10,
+            KeyCode::Home => self.show_scroll = 0,
+            KeyCode::Char('a') => {
+                if let Some((kind, name)) = self.shown_node.clone() {
+                    self.watch_add(kind, &name, true);
+                }
+            }
+            KeyCode::Char('c') => {
+                self.focus = Focus::Command;
+            }
+            _ => {}
+        }
+    }
+
+    fn on_watch_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Left => self.focus = Focus::Tree,
+            KeyCode::Up => {
+                if let Some(s) = self.watch_state.selected() {
+                    self.watch_state.select(Some(s.saturating_sub(1)));
+                } else if !self.watch.is_empty() {
+                    self.watch_state.select(Some(0));
+                }
+            }
+            KeyCode::Down => {
+                if let Some(s) = self.watch_state.selected() {
+                    let next = (s + 1).min(self.watch.len().saturating_sub(1));
+                    self.watch_state.select(Some(next));
+                } else if !self.watch.is_empty() {
+                    self.watch_state.select(Some(0));
+                }
+            }
+            KeyCode::Enter => {
+                let Some(idx) = self.watch_state.selected() else {
+                    return;
+                };
+                if idx >= self.watch.len() {
+                    return;
+                }
+                let w = &self.watch[idx];
+                if w.writable == 1 {
+                    let def = w.value.clone();
+                    let label = w.name.clone();
+                    let cursor = def.len();
+                    self.input = Some(InputState {
+                        prompt: format!("Set {label}"),
+                        buffer: def,
+                        cursor,
+                        action: InputAction::SetValue(idx),
+                    });
+                } else if w.writable == -1 {
+                    self.watch_unlink(idx);
+                }
+            }
+            KeyCode::Char('s') => {
+                let Some(idx) = self.watch_state.selected() else {
+                    return;
+                };
+                if idx < self.watch.len()
+                    && self.watch[idx].writable == 1
+                    && self.watch[idx].dtype == "bit"
+                {
+                    self.watch_set(idx, "1");
+                }
+            }
+            KeyCode::Char('c') => {
+                let Some(idx) = self.watch_state.selected() else {
+                    return;
+                };
+                if idx < self.watch.len()
+                    && self.watch[idx].writable == 1
+                    && self.watch[idx].dtype == "bit"
+                {
+                    self.watch_set(idx, "0");
+                }
+            }
+            KeyCode::Char('u') => {
+                if let Some(idx) = self.watch_state.selected() {
+                    self.watch_unlink(idx);
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                if let Some(idx) = self.watch_state.selected() {
+                    self.watch_remove(idx);
+                }
+            }
+            KeyCode::Char('r') => self.reload_watch(),
+            KeyCode::Char('e') => self.watch_erase(),
+            KeyCode::Char('a') => {
+                self.input = Some(InputState {
+                    prompt: "Add to watch (pin/param/sig name)".to_string(),
+                    buffer: String::new(),
+                    cursor: 0,
+                    action: InputAction::AddWatch,
+                });
+            }
+            KeyCode::Char('o') => {
+                let Some(idx) = self.watch_state.selected() else {
+                    return;
+                };
+                if idx >= self.watch.len() {
+                    return;
+                }
+                let (kind, name) = {
+                    let w = &self.watch[idx];
+                    (w.kind, w.name.clone())
+                };
+                let path = format!("{}+{}", kind.kw(), name);
+                self.tree.reveal(&path);
+                self.tab = Tab::Show;
+                self.focus = Focus::ShowText;
+                self.show_node(kind, &name);
+            }
+            KeyCode::Char('L') => {
+                let def = self
+                    .last_watch_dir
+                    .join(&self.last_watch_tail)
+                    .to_string_lossy()
+                    .into_owned();
+                let cursor = def.len();
+                self.input = Some(InputState {
+                    prompt: "Load a watch list".to_string(),
+                    buffer: def,
+                    cursor,
+                    action: InputAction::LoadWatchFile,
+                });
+            }
+            KeyCode::Char('S') => {
+                self.save_watch_prompt(false);
+            }
+            KeyCode::Char('m') => {
+                self.save_watch_prompt(true);
+            }
+            _ => {}
+        }
+    }
+
+    fn on_settings_key(&mut self, key: KeyEvent) {
+        let n = 6; // 5 settings + Apply
+        let sel = self.settings_state.selected().unwrap_or(0);
+        match key.code {
+            KeyCode::Up => self.settings_state.select(Some(sel.saturating_sub(1))),
+            KeyCode::Down => self.settings_state.select(Some((sel + 1).min(n - 1))),
+            KeyCode::Enter | KeyCode::Char(' ') => match sel {
+                0..=3 => {
+                    let def = match sel {
+                        0 => self.prefs.watch_interval.to_string(),
+                        1 => self.prefs.col1_width.to_string(),
+                        2 => self.prefs.ffmts.clone(),
+                        _ => self.prefs.ifmts.clone(),
+                    };
+                    self.input = Some(InputState {
+                        prompt: "Edit setting".to_string(),
+                        buffer: def.clone(),
+                        cursor: def.len(),
+                        action: InputAction::SetSetting(sel),
+                    });
+                }
+                4 => {
+                    // remember watchlist toggle
+                    self.prefs.auto_save_watchlist = !self.prefs.auto_save_watchlist;
+                    self.set_status("Remember watchlist toggled".to_string(), false);
+                }
+                _ => {
+                    // Apply
+                    self.poll_watch();
+                    self.set_status("Settings applied".to_string(), false);
+                }
+            },
+            _ => {}
+        }
+    }
+}
+
+impl InputAction {}
+
+fn remove_char_at(s: &mut String, idx: usize) {
+    if let Some((pos, _)) = s.char_indices().nth(idx) {
+        s.remove(pos);
+    }
+}
+
+/// Main loop: draw, wait for events or the watch tick.
+pub fn run<B: Backend<Error = io::Error>>(term: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
+    loop {
+        if app.quit {
+            break;
+        }
+        app.poll_if_due();
+        term.draw(|f| ui::draw(f, app))?;
+        let interval = Duration::from_millis(app.prefs.watch_interval.max(20));
+        let deadline = app.last_tick_instant() + interval;
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if event::poll(wait)? {
+            match event::read()? {
+                Event::Key(k) => app.on_key(k),
+                Event::Resize(_, _) => {}
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}

@@ -577,7 +577,7 @@ GLOBAL
   r                   reload (tree: refresh from HAL, watch: re-read writability)
 
 TREE PANEL
-  ↑ ↓                 move selection
+  ↑ ↓                 move selection (live-previews in SHOW tab)
   →                   expand node / enter child / leaf→right panel
   ←                   collapse node / go to parent
   Space               toggle expand

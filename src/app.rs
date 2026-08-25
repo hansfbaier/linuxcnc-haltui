@@ -584,6 +584,22 @@ impl App {
         self.show_scroll = 0;
     }
 
+    /// Live-preview the current tree selection in the SHOW tab (no Enter
+    /// needed). Roots show the whole type list, matching halshow's click
+    /// behaviour.
+    fn preview_selection(&mut self) {
+        if self.tab != Tab::Show {
+            return;
+        }
+        let sel = self
+            .tree
+            .selected_node()
+            .map(|n| (n.kind, tree::full_name(&n.path).unwrap_or("").to_string()));
+        if let Some((kind, name)) = sel {
+            self.show_node(kind, &name);
+        }
+    }
+
     fn run_command(&mut self) {
         let cmd = self.command.trim().to_string();
         self.command.clear();
@@ -695,6 +711,7 @@ impl App {
             KeyCode::Char('1') => {
                 self.tab = Tab::Show;
                 self.focus = Focus::ShowText;
+                self.preview_selection();
                 return;
             }
             KeyCode::Char('2') => {
@@ -751,6 +768,9 @@ impl App {
             Tab::Watch => Tab::Show,
         };
         self.focus_content();
+        if self.tab == Tab::Show {
+            self.preview_selection();
+        }
     }
 
     fn prev_tab(&mut self) {
@@ -759,6 +779,9 @@ impl App {
             Tab::Watch => Tab::Show,
         };
         self.focus_content();
+        if self.tab == Tab::Show {
+            self.preview_selection();
+        }
     }
 
     fn open_settings(&mut self) {
@@ -985,27 +1008,45 @@ impl App {
 
     fn on_tree_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Up => self.tree_move(-1),
-            KeyCode::Down => self.tree_move(1),
+            KeyCode::Up => {
+                self.tree_move(-1);
+                self.preview_selection();
+            }
+            KeyCode::Down => {
+                self.tree_move(1);
+                self.preview_selection();
+            }
             KeyCode::Right => {
+                let mut moved = false;
                 if let Some(n) = self.tree.selected_node().cloned() {
                     if !n.expanded && n.is_branch() {
                         self.tree_set_expanded(&n.path, true);
                     } else if let Some(first) = n.children.first() {
                         self.tree.selected = first.path.clone();
+                        moved = true;
                     } else {
-                        // leaf has no children: hand focus to the right panel
+                        // leaf has no children: preview it, then hand focus
+                        // to the right panel
+                        self.preview_selection();
                         self.focus_content();
                     }
                 }
+                if moved {
+                    self.preview_selection();
+                }
             }
             KeyCode::Left => {
+                let mut moved = false;
                 if let Some(n) = self.tree.selected_node().cloned() {
                     if n.expanded && n.is_branch() {
                         self.tree_set_expanded(&n.path, false);
                     } else if let Some(parent) = tree::parent_path(&n.path) {
                         self.tree.selected = parent;
+                        moved = true;
                     }
+                }
+                if moved {
+                    self.preview_selection();
                 }
             }
             KeyCode::Char(' ') => {

@@ -443,13 +443,15 @@ impl App {
             let w = &self.watch[idx];
             (w.kind, w.name.clone())
         };
-        let out = HalSession::exec(&["unlinkp", &name]);
-        if out.contains("unlinked") {
+        let _ = HalSession::exec(&["unlinkp", &name]);
+        // halcmd's unlinkp prints nothing on success in some versions —
+        // detect the result by re-reading the pin's writability instead
+        let new_writable = self.writable_of(kind, &name);
+        self.watch[idx].writable = new_writable;
+        if new_writable != -1 {
             self.set_status(format!("'{name}' unlinked"), false);
-            // re-detect writability
-            self.watch[idx].writable = self.writable_of(kind, &name);
         } else {
-            self.set_status(out.trim().to_string(), true);
+            self.set_status(format!("could not unlink '{name}'"), true);
         }
     }
 

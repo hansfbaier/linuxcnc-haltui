@@ -8,6 +8,10 @@ values — all from the keyboard.
 `haltui` talks to HAL through the standard `halcmd` program, so it works
 with any installed LinuxCNC and needs nothing but `halcmd` on `$PATH`.
 
+<img width="1904" height="1112" alt="image" src="https://github.com/user-attachments/assets/376f06e3-e9c2-419b-b7a8-8417f476f0fe" />
+
+<img width="1902" height="1115" alt="image" src="https://github.com/user-attachments/assets/527b4be6-0e26-4a10-9f35-b5d628e59a9d" />
+
 ## Features
 
 - **Tree view** of Components / Pins / Parameters / Signals / Functions /

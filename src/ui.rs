@@ -123,7 +123,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         }
         (_, Some(_)) => " Enter ok | Esc cancel | Ctrl+U clear | F1 help ".to_string(),
         (Focus::Tree, None) => {
-            " → expand closed / → pane if scrollable | ← collapse | Enter open/add | Space toggle | a add | A add subtree | \
+            " → expand closed / → pane if scrollable | ← collapse | Enter open/add | Space toggle/a leaf | a add | A add subtree | \
              s show | e/w expand/collapse all | E/W this type | / filter | f full-path | r reload | \
              F2 tree | [ ] resize ".to_string()
         }
@@ -627,7 +627,7 @@ TREE PANEL
   →                   expand closed node; open node jumps to the right pane
                       when useful (WATCH list, or scrollable SHOW output)
   ←                   collapse node / go to parent
-  Space               toggle expand
+  Space               toggle expand (adds a leaf to watch in WATCH tab)
   Enter               open node in SHOW tab (or add to watch in WATCH tab)
   a                   add selected leaf to watch list
   A                   add all leaves below selected node to watch list

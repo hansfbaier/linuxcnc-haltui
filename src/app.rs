@@ -1145,10 +1145,17 @@ impl App {
                 }
             }
             KeyCode::Char(' ') => {
-                if let Some(n) = self.tree.selected_node() {
-                    let path = n.path.clone();
-                    let expanded = n.expanded;
-                    self.tree_set_expanded(&path, !expanded);
+                if let Some(n) = self.tree.selected_node().cloned() {
+                    if n.leaf && self.tab == Tab::Watch {
+                        let kind = n.kind;
+                        let name = tree::full_name(&n.path).unwrap_or(&n.name).to_string();
+                        self.watch_add(kind, &name, true);
+                        self.poll_watch();
+                    } else {
+                        let path = n.path.clone();
+                        let expanded = n.expanded;
+                        self.tree_set_expanded(&path, !expanded);
+                    }
                 }
             }
             KeyCode::Enter => {

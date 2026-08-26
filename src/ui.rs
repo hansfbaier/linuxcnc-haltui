@@ -291,11 +291,7 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
     let para = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
-        .style(if app.focus == Focus::ShowText {
-            Style::default().fg(AYU_FG)
-        } else {
-            Style::default().fg(AYU_DIM)
-        });
+        .style(Style::default().fg(AYU_FG));
     f.render_widget(para, rows[0]);
     if total > 0 && inner.height as usize > 0 {
         let mut sb_state = ScrollbarState::new(total).position(app.show_scroll);

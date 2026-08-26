@@ -30,6 +30,9 @@ with any installed LinuxCNC and needs nothing but `halcmd` on `$PATH`.
   formats), byte-compatible with halshow's File menu.
 - Every function reachable by keyboard; a contextual key-hint bar and a
   full help overlay (`F1` / `?`) document all bindings.
+- Colors follow the **ayu-dark** palette
+  (<https://github.com/ayu-theme/ayu-colors>), including the selection and
+  find-match shades.
 
 ## Build
 

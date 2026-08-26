@@ -13,19 +13,44 @@ use crate::hal::HalType;
 use crate::tree::{self, TreeNode};
 use crate::watch::WatchItem;
 
-const NAME_PIN: Color = Color::Reset;
-const NAME_PARAM: Color = Color::Rgb(110, 52, 0); // #6e3400, halshow param color
-const NAME_SIG: Color = Color::Rgb(0, 0, 205); // blue3
-const BIT_TRUE: Color = Color::Yellow;
-const BIT_FALSE: Color = Color::Rgb(139, 26, 26); // firebrick4
-const ERR: Color = Color::Rgb(255, 80, 80);
+// classic ayu-dark palette (ayu-colors dark variant, pitch-black background)
+const AYU_BG: Color = Color::Black;
+const AYU_PANEL: Color = Color::Rgb(0x1C, 0x23, 0x2B); // line highlight
+const AYU_FG: Color = Color::Rgb(0xB3, 0xB1, 0xAD); // foreground
+const AYU_DIM: Color = Color::Rgb(0x62, 0x6A, 0x73); // comment
+const AYU_ACCENT: Color = Color::Rgb(0xFF, 0xB4, 0x54); // accent orange
+const AYU_YELLOW: Color = Color::Rgb(0xE6, 0xB4, 0x50); // operator
+const AYU_TEAL: Color = Color::Rgb(0x95, 0xE6, 0xCB); // regexp
+const AYU_BLUE: Color = Color::Rgb(0x39, 0xBA, 0xE6); // tag
+const AYU_PURPLE: Color = Color::Rgb(0xD2, 0xA6, 0xFF); // entity
+const AYU_RED: Color = Color::Rgb(0xF0, 0x71, 0x78); // markup
+const AYU_ERROR: Color = Color::Rgb(0xFF, 0x33, 0x33); // invalid
+const AYU_SEL_BG: Color = Color::Rgb(0x25, 0x33, 0x40); // selection
+const AYU_MATCH_BG: Color = Color::Rgb(0x4C, 0x41, 0x26); // find match
+
+const NAME_PIN: Color = AYU_FG;
+const NAME_PARAM: Color = AYU_PURPLE;
+const NAME_SIG: Color = AYU_BLUE;
+const BIT_TRUE: Color = AYU_YELLOW;
+const BIT_FALSE: Color = AYU_RED;
+const ERR: Color = AYU_ERROR;
+
+/// Shared bordered block: ayu border + accent title.
+fn ayu_block() -> Block<'static> {
+    Block::bordered()
+        .border_style(Style::default().fg(AYU_DIM))
+        .title_style(Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD))
+}
 
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let area = f.area();
+    // ayu-dark base colors
+    f.buffer_mut()
+        .set_style(area, Style::default().fg(AYU_FG).bg(AYU_BG));
     if app.help {
         draw_help(f, app);
         return;
     }
-    let area = f.area();
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -69,10 +94,14 @@ fn draw_title(f: &mut Frame, app: &App, area: Rect) {
     let left = format!(" haltui — {}", app.title);
     let right = "F1/? help ";
     let width = area.width as usize - left.chars().count().min(area.width as usize);
-    let mut line = Line::from(left).left_aligned();
+    let mut line = Line::from(Span::styled(
+        left,
+        Style::default().fg(AYU_FG).add_modifier(Modifier::BOLD),
+    ))
+    .left_aligned();
     line.push_span(Span::styled(
         format!("{:>width$}", right, width = width),
-        Style::default().add_modifier(Modifier::DIM),
+        Style::default().fg(AYU_DIM),
     ));
     f.render_widget(Paragraph::new(line), area);
 }
@@ -81,7 +110,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
     let style = if app.status_err {
         Style::default().fg(ERR)
     } else {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(AYU_YELLOW)
     };
     let text = clip(&app.status, area.width as usize);
     f.render_widget(Paragraph::new(Span::styled(text, style)), area);
@@ -120,14 +149,14 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(
             clip(&text, area.width as usize),
-            Style::default().fg(Color::Black).bg(Color::Gray),
+            Style::default().fg(AYU_FG).bg(AYU_PANEL),
         )),
         area,
     );
 }
 
 fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::bordered().title("Tree View");
+    let block = ayu_block().title("Tree View");
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
     // list on top, filter entry on its own bottom row (no overlay, so the
@@ -166,7 +195,7 @@ fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
             let style = match node {
                 Some(n) if n.depth_root() => Style::default().add_modifier(Modifier::BOLD),
                 Some(n) if n.leaf => Style::default().fg(kind_color(n.kind)),
-                _ => Style::default(),
+                _ => Style::default().fg(AYU_FG),
             };
             let label = node.map(|n| n.name.clone()).unwrap_or_default();
             ListItem::new(Line::from(Span::styled(
@@ -181,7 +210,8 @@ fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let list = List::new(items)
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .fg(AYU_FG)
+                .bg(AYU_SEL_BG)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("");
@@ -196,27 +226,22 @@ fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let mut text = String::from("Filter: ");
     if app.tree.filter.is_empty() {
         text.push_str(&styled_placeholder());
-        let style = if app.focus == Focus::Filter {
-            Style::default().fg(Color::Gray)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        f.render_widget(Paragraph::new(Span::styled(text, style)), filter_area);
+        f.render_widget(
+            Paragraph::new(Span::styled(text, Style::default().fg(AYU_DIM))),
+            filter_area,
+        );
     } else {
         text.push_str(&app.tree.filter);
         let style = if app.focus == Focus::Filter {
-            Style::default().fg(Color::White).bg(Color::DarkGray)
+            Style::default().fg(AYU_FG).bg(AYU_SEL_BG)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(AYU_FG)
         };
         f.render_widget(Paragraph::new(Span::styled(text, style)), filter_area);
     }
     if app.tree.full_path && filter_area.width > 14 {
         f.render_widget(
-            Paragraph::new(Span::styled(
-                "[full-path]",
-                Style::default().fg(Color::Cyan),
-            )),
+            Paragraph::new(Span::styled("[full-path]", Style::default().fg(AYU_TEAL))),
             Rect {
                 x: filter_area.x + filter_area.width.saturating_sub(11),
                 width: 11,
@@ -233,11 +258,8 @@ fn draw_right(f: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
     let tabs = Tabs::new(vec![" SHOW ", " WATCH "])
         .select(app.tab as usize)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
+        .style(Style::default().fg(AYU_DIM))
+        .highlight_style(Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD))
         .divider("|");
     f.render_widget(tabs, rows[0]);
     match app.tab {
@@ -251,7 +273,7 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
-    let block = Block::bordered().title(" HAL show output ");
+    let block = ayu_block().title(" HAL show output ");
     let inner = block.inner(rows[0]);
     // viewport rows for paging
     app.show_page = inner.height.max(1) as usize;
@@ -270,9 +292,9 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
         .block(block)
         .wrap(Wrap { trim: false })
         .style(if app.focus == Focus::ShowText {
-            Style::default().fg(Color::White)
+            Style::default().fg(AYU_FG)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(AYU_DIM)
         });
     f.render_widget(para, rows[0]);
     if total > 0 && inner.height as usize > 0 {
@@ -292,9 +314,9 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
         cmd.push(' ');
     }
     let style = if app.focus == Focus::Command {
-        Style::default().fg(Color::White).bg(Color::DarkGray)
+        Style::default().fg(AYU_FG).bg(AYU_SEL_BG)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(AYU_FG)
     };
     f.render_widget(
         Paragraph::new(Span::styled(clip(&cmd, rows[1].width as usize), style)),
@@ -309,8 +331,8 @@ fn draw_watch(f: &mut Frame, app: &mut App, area: Rect) {
         let hint = "Watchlist empty.\n<-- Select a leaf in the tree, press Enter (WATCH tab) or 'a'.\n    Press 'a' here to add by name.";
         f.render_widget(
             Paragraph::new(hint)
-                .block(Block::bordered().title(" WATCH "))
-                .style(Style::default().fg(Color::DarkGray)),
+                .block(ayu_block().title(" WATCH "))
+                .style(Style::default().fg(AYU_DIM)),
             area,
         );
         return;
@@ -323,18 +345,19 @@ fn draw_watch(f: &mut Frame, app: &mut App, area: Rect) {
     ];
     let rows: Vec<Row> = app.watch.iter().map(|w| watch_row(w, name_w)).collect();
     let table = Table::new(rows, widths)
-        .block(Block::bordered().title(" WATCH "))
+        .block(ayu_block().title(" WATCH "))
         .column_spacing(1)
         .row_highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .fg(AYU_FG)
+                .bg(AYU_SEL_BG)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ")
         .style(if app.focus == Focus::Watch {
-            Style::default().fg(Color::White)
+            Style::default().fg(AYU_FG)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(AYU_DIM)
         });
     let sel = app.watch_state.selected();
     if sel.is_none() || sel.unwrap_or(0) >= app.watch.len() {
@@ -353,7 +376,7 @@ fn watch_row(w: &WatchItem, name_w: usize) -> Row<'static> {
     };
     // value indicator
     let indicator = if w.error {
-        Span::styled("● ", Style::default().fg(Color::DarkGray))
+        Span::styled("● ", Style::default().fg(AYU_DIM))
     } else if w.dtype == "bit" {
         let color = if w.value == "TRUE" {
             BIT_TRUE
@@ -362,14 +385,14 @@ fn watch_row(w: &WatchItem, name_w: usize) -> Row<'static> {
         };
         Span::styled("● ", Style::default().fg(color))
     } else {
-        Span::raw("  ")
+        Span::styled("  ", Style::default().fg(AYU_FG))
     };
     let name = Span::styled(
         clip(&w.name, name_w.saturating_sub(2)),
         Style::default().fg(name_color),
     );
     let value = if w.error {
-        Span::styled("----", Style::default().fg(Color::DarkGray))
+        Span::styled("----", Style::default().fg(AYU_DIM))
     } else if w.dtype == "bit" {
         let color = if w.value == "TRUE" {
             BIT_TRUE
@@ -378,7 +401,7 @@ fn watch_row(w: &WatchItem, name_w: usize) -> Row<'static> {
         };
         Span::styled(w.value.clone(), Style::default().fg(color))
     } else {
-        Span::raw(w.value.clone())
+        Span::styled(w.value.clone(), Style::default().fg(AYU_FG))
     };
     let actions = match (w.dtype.as_str(), w.writable) {
         ("bit", 1) => "Set|Clr",
@@ -390,7 +413,7 @@ fn watch_row(w: &WatchItem, name_w: usize) -> Row<'static> {
     };
     let action_span = Span::styled(
         actions,
-        Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+        Style::default().fg(AYU_DIM).add_modifier(Modifier::DIM),
     );
     Row::new(vec![
         Cell::from(Line::from(vec![indicator, name])),
@@ -428,18 +451,18 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
             let text = if *label == "Apply" {
                 Line::from(Span::styled(
                     " Apply",
-                    Style::default().add_modifier(Modifier::BOLD),
+                    Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD),
                 ))
             } else {
                 Line::from(vec![
-                    Span::raw(*label),
+                    Span::styled(*label, Style::default().fg(AYU_FG)),
                     Span::styled(
                         format!(
                             "{:>width$}",
                             val,
                             width = (40usize).saturating_sub(label.len())
                         ),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(AYU_TEAL),
                     ),
                 ])
             };
@@ -450,17 +473,18 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
         app.settings_state.select(Some(0));
     }
     let list = List::new(items)
-        .block(Block::bordered().title(" SETTINGS "))
+        .block(ayu_block().title(" SETTINGS "))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .fg(AYU_FG)
+                .bg(AYU_SEL_BG)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ")
         .style(if app.focus == Focus::Settings {
-            Style::default().fg(Color::White)
+            Style::default().fg(AYU_FG)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(AYU_DIM)
         });
     f.render_stateful_widget(list, area, &mut app.settings_state);
     // storage info
@@ -470,9 +494,9 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
         "\"--noprefs\" option set. Settings will not be saved!".to_string()
     };
     let style = if app.use_prefs {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(AYU_DIM)
     } else {
-        Style::default().fg(Color::Red)
+        Style::default().fg(AYU_ERROR)
     };
     let info_area = Rect {
         x: area.x + 2,
@@ -500,17 +524,15 @@ fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
     };
     f.render_widget(Clear, rect);
     f.render_widget(
-        Block::bordered()
+        ayu_block()
             .title(format!(" {} ", input.prompt))
-            .style(Style::default().bg(Color::Black)),
+            .style(Style::default().bg(AYU_PANEL)),
         rect,
     );
     match input.kind {
         InputKind::BitPick => {
-            let sel = Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD);
-            let unsel = Style::default().fg(Color::Gray);
+            let sel = Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD);
+            let unsel = Style::default().fg(AYU_DIM);
             let row = |f: &mut Frame, y: u16, mark: &str, label: &str, style: Style| {
                 let r = Rect {
                     x: rect.x + 4,
@@ -521,7 +543,7 @@ fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
                 f.render_widget(
                     Paragraph::new(Line::from(vec![
                         Span::styled(mark, style),
-                        Span::raw(" "),
+                        Span::styled(" ", style),
                         Span::styled(label, style),
                     ])),
                     r,
@@ -555,7 +577,7 @@ fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
             f.render_widget(
                 Paragraph::new(Span::styled(
                     " ←→ / ↑↓ toggle   t/f or 1/0 pick   Enter set   Esc cancel",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(AYU_DIM),
                 )),
                 hint,
             );
@@ -571,7 +593,7 @@ fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
             text.push(' ');
             let cursor_x = input.cursor.min(inner.width.saturating_sub(1) as usize);
             f.render_widget(
-                Paragraph::new(Span::styled(text, Style::default().fg(Color::White))),
+                Paragraph::new(Span::styled(text, Style::default().fg(AYU_FG))),
                 inner,
             );
             f.set_cursor_position(Position::new(inner.x + cursor_x as u16, inner.y));
@@ -697,7 +719,9 @@ fn draw_help(f: &mut Frame, app: &mut App) {
         height: h,
     };
     f.render_widget(Clear, rect);
-    let block = Block::bordered().title(" haltui help — F1 / ? / Esc closes ");
+    let block = ayu_block()
+        .title(" haltui help — F1 / ? / Esc closes ")
+        .style(Style::default().bg(AYU_BG));
     let inner = block.inner(rect);
     let lines: Vec<&str> = HELP.lines().collect();
     let max_scroll = lines.len().saturating_sub(inner.height as usize);
@@ -707,7 +731,7 @@ fn draw_help(f: &mut Frame, app: &mut App) {
         .iter()
         .skip(app.help_scroll)
         .take(inner.height as usize)
-        .map(|l| highlight_line(l, &query))
+        .map(|l| help_line(l, &query))
         .collect();
     f.render_widget(
         Paragraph::new(text_lines)
@@ -740,16 +764,38 @@ fn draw_help(f: &mut Frame, app: &mut App) {
     f.render_widget(
         Paragraph::new(Span::styled(
             clip(&hint, hint_area.width as usize),
-            Style::default().fg(Color::Black).bg(Color::Gray),
+            Style::default().fg(AYU_FG).bg(AYU_PANEL),
         )),
         hint_area,
     );
 }
 
-/// Line with every case-insensitive occurrence of `query` highlighted.
-fn highlight_line<'a>(line: &'a str, query: &str) -> Line<'a> {
+/// Style base for a help line: title/separator in accent, section
+/// headers in teal, body in the default ayu foreground.
+fn help_base_style(line: &str) -> Style {
+    let t = line.trim_end();
+    if t.starts_with("haltui —") || (!t.is_empty() && t.chars().all(|c| c == '=')) {
+        return Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD);
+    }
+    if !t.starts_with(' ') && !t.is_empty() {
+        // section header: non-indented line with an uppercase run ≥ 2
+        let upper_run = t
+            .chars()
+            .take_while(|c| c.is_uppercase() || c.is_ascii_digit() || " /().'".contains(*c))
+            .count();
+        if upper_run >= 2 {
+            return Style::default().fg(AYU_TEAL).add_modifier(Modifier::BOLD);
+        }
+    }
+    Style::default().fg(AYU_FG)
+}
+
+/// Help line with base styling applied and every case-insensitive
+/// occurrence of `query` highlighted.
+fn help_line<'a>(line: &'a str, query: &str) -> Line<'a> {
+    let base = help_base_style(line);
     if query.is_empty() || !line.is_ascii() || !query.is_ascii() {
-        return Line::from(line);
+        return Line::from(Span::styled(line, base));
     }
     let lower = line.to_ascii_lowercase();
     let q = query.to_ascii_lowercase();
@@ -759,16 +805,16 @@ fn highlight_line<'a>(line: &'a str, query: &str) -> Line<'a> {
         let start = pos + rel;
         let end = start + q.len();
         if start > pos {
-            spans.push(Span::raw(&line[pos..start]));
+            spans.push(Span::styled(&line[pos..start], base));
         }
         spans.push(Span::styled(
             &line[start..end],
-            Style::default().fg(Color::Black).bg(Color::Yellow),
+            base.fg(AYU_YELLOW).bg(AYU_MATCH_BG),
         ));
         pos = end;
     }
     if pos < line.len() {
-        spans.push(Span::raw(&line[pos..]));
+        spans.push(Span::styled(&line[pos..], base));
     }
     Line::from(spans)
 }
@@ -780,7 +826,7 @@ fn kind_color(kind: HalType) -> Color {
         HalType::Pin => NAME_PIN,
         HalType::Param => NAME_PARAM,
         HalType::Sig => NAME_SIG,
-        _ => Color::Reset,
+        _ => AYU_FG,
     }
 }
 

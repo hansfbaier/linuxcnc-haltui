@@ -128,6 +128,9 @@ pub struct App {
     pub status_err: bool,
     pub help: bool,
     pub help_scroll: usize,
+    /// incremental search inside the help overlay
+    pub help_search: String,
+    pub help_search_on: bool,
     pub quit: bool,
 
     pub last_watch_dir: PathBuf,
@@ -181,6 +184,8 @@ impl App {
             status_err: false,
             help: false,
             help_scroll: 0,
+            help_search: String::new(),
+            help_search_on: false,
             quit: false,
             last_watch_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             last_watch_tail: "my.halshow".to_string(),
@@ -619,6 +624,41 @@ impl App {
         }
     }
 
+    fn open_help(&mut self) {
+        self.help = true;
+        self.help_scroll = 0;
+        self.help_search.clear();
+        self.help_search_on = false;
+    }
+
+    /// First help line at/after `from` (wrapping) containing the query.
+    fn help_match_after(&self, from: usize, wrap: bool) -> Option<usize> {
+        let q = self.help_search.to_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        let lines: Vec<&str> = crate::ui::HELP.lines().collect();
+        for (i, l) in lines.iter().enumerate().skip(from) {
+            if l.to_lowercase().contains(&q) {
+                return Some(i);
+            }
+        }
+        if wrap {
+            for (i, l) in lines.iter().enumerate().take(from) {
+                if l.to_lowercase().contains(&q) {
+                    return Some(i);
+                }
+            }
+        }
+        None
+    }
+
+    fn help_jump_to_match(&mut self, from: usize, wrap: bool) {
+        if let Some(i) = self.help_match_after(from, wrap) {
+            self.help_scroll = i;
+        }
+    }
+
     fn run_command(&mut self) {
         let cmd = self.command.trim().to_string();
         self.command.clear();
@@ -660,13 +700,39 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) {
         // help overlay swallows everything but its own keys
         if self.help {
-            match key.code {
-                KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?') => self.help = false,
-                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
-                KeyCode::Down => self.help_scroll += 1,
-                KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
-                KeyCode::PageDown => self.help_scroll += 10,
-                _ => {}
+            if self.help_search_on {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.help_search_on = false;
+                        self.help_search.clear();
+                    }
+                    KeyCode::Enter => {
+                        // next match after the current line, wrapping
+                        self.help_jump_to_match(self.help_scroll + 1, true);
+                    }
+                    KeyCode::Backspace => {
+                        self.help_search.pop();
+                        self.help_jump_to_match(self.help_scroll, false);
+                    }
+                    KeyCode::Char(c) => {
+                        self.help_search.push(c);
+                        self.help_jump_to_match(self.help_scroll, false);
+                    }
+                    _ => {}
+                }
+            } else {
+                match key.code {
+                    KeyCode::Esc | KeyCode::F(1) | KeyCode::Char('?') => self.help = false,
+                    KeyCode::Char('/') => {
+                        self.help_search_on = true;
+                        self.help_search.clear();
+                    }
+                    KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                    KeyCode::Down => self.help_scroll += 1,
+                    KeyCode::PageUp => self.help_scroll = self.help_scroll.saturating_sub(10),
+                    KeyCode::PageDown => self.help_scroll += 10,
+                    _ => {}
+                }
             }
             return;
         }
@@ -677,8 +743,7 @@ impl App {
         }
         // F1 opens help from anywhere
         if key.code == KeyCode::F(1) {
-            self.help = true;
-            self.help_scroll = 0;
+            self.open_help();
             return;
         }
         // settings screen is a full-screen mode, not a tab
@@ -715,8 +780,7 @@ impl App {
                 return;
             }
             KeyCode::Char('?') => {
-                self.help = true;
-                self.help_scroll = 0;
+                self.open_help();
                 return;
             }
             KeyCode::Char('/') => {
@@ -1013,8 +1077,7 @@ impl App {
                 self.focus = Focus::Tree;
             }
             KeyCode::Char('?') => {
-                self.help = true;
-                self.help_scroll = 0;
+                self.open_help();
             }
             KeyCode::Enter => self.run_command(),
             KeyCode::Up => self.cmd_history(-1),

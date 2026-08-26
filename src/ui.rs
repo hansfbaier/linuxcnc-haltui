@@ -582,8 +582,13 @@ fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
 // ----------------------------------------------------------------
 // Help overlay: the full, self-documenting key map.
 
-const HELP: &str = r#"haltui — TUI port of LinuxCNC halshow
+pub const HELP: &str = r#"haltui — TUI port of LinuxCNC halshow
 =====================================
+
+SEARCH THIS HELP
+  /                   incremental search (case-insensitive substring)
+  type               jump to first match, Enter = next match
+  Esc                leave search
 
 GLOBAL
   q / Ctrl+C          quit (settings + watchlist saved to the prefs file)
@@ -697,15 +702,17 @@ fn draw_help(f: &mut Frame, app: &mut App) {
     let lines: Vec<&str> = HELP.lines().collect();
     let max_scroll = lines.len().saturating_sub(inner.height as usize);
     app.help_scroll = app.help_scroll.min(max_scroll);
-    let text = lines
+    let query = app.help_search.clone();
+    let text_lines: Vec<Line> = lines
         .iter()
         .skip(app.help_scroll)
         .take(inner.height as usize)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
+        .map(|l| highlight_line(l, &query))
+        .collect();
     f.render_widget(
-        Paragraph::new(text).block(block).wrap(Wrap { trim: false }),
+        Paragraph::new(text_lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
         rect,
     );
     if lines.len() > inner.height as usize {
@@ -722,13 +729,48 @@ fn draw_help(f: &mut Frame, app: &mut App) {
         width: area.width,
         height: 1,
     };
+    let hint = if app.help_search_on {
+        format!(
+            " search: {} | Enter next match | Esc back ",
+            app.help_search
+        )
+    } else {
+        " ↑↓/PgUp/PgDn scroll | / search | Enter next match | F1/?/Esc close ".to_string()
+    };
     f.render_widget(
         Paragraph::new(Span::styled(
-            " ↑↓/PgUp/PgDn scroll | F1/?/Esc close ",
+            clip(&hint, hint_area.width as usize),
             Style::default().fg(Color::Black).bg(Color::Gray),
         )),
         hint_area,
     );
+}
+
+/// Line with every case-insensitive occurrence of `query` highlighted.
+fn highlight_line<'a>(line: &'a str, query: &str) -> Line<'a> {
+    if query.is_empty() || !line.is_ascii() || !query.is_ascii() {
+        return Line::from(line);
+    }
+    let lower = line.to_ascii_lowercase();
+    let q = query.to_ascii_lowercase();
+    let mut spans: Vec<Span> = Vec::new();
+    let mut pos = 0usize;
+    while let Some(rel) = lower[pos..].find(&q) {
+        let start = pos + rel;
+        let end = start + q.len();
+        if start > pos {
+            spans.push(Span::raw(&line[pos..start]));
+        }
+        spans.push(Span::styled(
+            &line[start..end],
+            Style::default().fg(Color::Black).bg(Color::Yellow),
+        ));
+        pos = end;
+    }
+    if pos < line.len() {
+        spans.push(Span::raw(&line[pos..]));
+    }
+    Line::from(spans)
 }
 
 // ----------------------------------------------------------------

@@ -69,7 +69,7 @@ Full list is in-app: press `F1` or `?` (self-documenting). Summary:
 | Key | Action |
 | ----- | -------- |
 | `q` / `Ctrl+C` | quit (prefs + watchlist saved) |
-| `F1` / `?` | help overlay |
+| `F1` / `?` | help overlay (`/` searches it incrementally) |
 | `Tab` / `Shift+Tab` | next / previous tab |
 | `1` `2` | SHOW / WATCH tab |
 | `F2` `F3` `F4` | focus tree / content / command entry |

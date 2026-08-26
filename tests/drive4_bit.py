@@ -9,6 +9,7 @@ import os
 import pty
 import select
 import struct
+import subprocess
 import sys
 import termios
 import time
@@ -70,9 +71,11 @@ def expect(name, cond):
 
 def main():
     ok = True
-    # pick a writable bit pin present in pretty much any LinuxCNC HAL
-    # (the dialog is only opened + cancelled; nothing is written)
-    pin = "halui.machine.on"
+    # use a harmless, self-loaded bit pin so the test works without a
+    # live machine config (dialog is only opened + cancelled; no writes)
+    subprocess.run(["halcmd", "loadrt", "not"], capture_output=True)
+    time.sleep(0.6)
+    pin = "not.0.in"
 
     h = Haltui(args=["--noprefs"])
     h.pump(1.5)
@@ -91,8 +94,7 @@ def main():
     ok &= expect("radio FALSE shown", "FALSE" in s)
     ok &= expect("radio hit hint", "toggle" in s)
 
-    # toggle with Right arrow → selection flips (check marker position)
-    before = "TRUE" in s
+    # toggle with Right arrow → selection flips
     h.send("\x1b[C", 0.4)  # Right
     s2 = h.screen()
     ok &= expect("toggle keypress accepted", "(•)" in s2)  # still has a selected marker

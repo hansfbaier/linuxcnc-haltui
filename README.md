@@ -92,8 +92,9 @@ expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
 **WATCH:** `↑↓` select / `PgUp PgDn` page, `Space` toggle a writable bit,
 `Enter` set value, `s`/`c` set/clear bit, `u` unlink, `x` remove, `r`
 reload, `e` erase, `a` add by name, `o` show in tree, `S` save (oneline),
-`m` save (multiline), `L` load. Newly added items are selected so they
-are scrolled into view.
+`m` save (multiline), `L` load. `S`/`m`/`L` open a file dialog to pick a
+`.halshow` file. Newly added items are selected so they are scrolled into
+view.
 
 **Settings screen:** `↑↓` select field, `Enter`/`Space` edit or toggle,
 `Esc`/`F5` close, `←` close + back to tree.

@@ -68,7 +68,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.settings_open {
         // settings is a full-screen mode reached via F5
         draw_settings(f, app, rows[1]);
-        if let Some(input) = &app.input {
+        if let Some(input) = &mut app.input {
             draw_input_popup(f, input);
         }
         return;
@@ -85,7 +85,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_tree_panel(f, app, main[0]);
     draw_right(f, app, main[1]);
 
-    if let Some(input) = &app.input {
+    if let Some(input) = &mut app.input {
         draw_input_popup(f, input);
     }
 }
@@ -138,7 +138,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         }
         (Focus::Watch, None) => {
             " ← tree | Space toggle bit | Enter set val | s set1 | c clr0 | u unlink | x remove | r reload | e erase | \
-             a add | o show in tree | S save | m save multiline | L load ".to_string()
+             a add | o show in tree | S/m save | L load (file dialog) ".to_string()
         }
         (Focus::Settings, None) => {
             " ← close + tree | Esc/F5 close | ↑↓ sel | Enter edit/toggle | Apply = Enter on last row ".to_string()
@@ -506,11 +506,16 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
+fn draw_input_popup(f: &mut Frame, input: &mut crate::app::InputState) {
+    if input.kind == InputKind::FileDialog {
+        draw_file_dialog(f, input);
+        return;
+    }
     let area = f.area();
     let (w, h) = match input.kind {
         InputKind::BitPick => ((area.width * 3 / 4).min(60), 7),
         InputKind::Text => ((area.width * 3 / 4).min(90), 5),
+        InputKind::FileDialog => unreachable!("handled above"),
     };
     let rect = Rect {
         x: (area.width.saturating_sub(w)) / 2,
@@ -594,7 +599,172 @@ fn draw_input_popup(f: &mut Frame, input: &crate::app::InputState) {
             );
             f.set_cursor_position(Position::new(inner.x + cursor_x as u16, inner.y));
         }
+        InputKind::FileDialog => unreachable!("handled above"),
     }
+}
+
+/// File open/save dialog: directory listing with a filter (load) or
+/// file-name (save) field. The selection is scrolled to stay visible here so
+/// the key handler doesn't need to know the viewport size.
+fn draw_file_dialog(f: &mut Frame, input: &mut crate::app::InputState) {
+    let area = f.area();
+    let w = (area.width * 3 / 4).min(90);
+    let h = (area.height.saturating_sub(2)).min(24);
+    let rect = Rect {
+        x: area.width.saturating_sub(w) / 2,
+        y: area.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        ayu_block()
+            .title(format!(" {} ", input.prompt))
+            .style(Style::default().bg(AYU_PANEL)),
+        rect,
+    );
+    let Some(dialog) = &mut input.dialog else {
+        return;
+    };
+    let inner = Rect {
+        x: rect.x + 2,
+        y: rect.y + 1,
+        width: rect.width.saturating_sub(4),
+        height: rect.height.saturating_sub(2),
+    };
+    // current directory
+    f.render_widget(
+        Paragraph::new(Span::styled(
+            dialog.dir.display().to_string(),
+            Style::default().fg(AYU_DIM),
+        )),
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        },
+    );
+    let list_top = inner.y + 1;
+    let field_y = inner.y + inner.height - 2;
+    let hint_y = inner.y + inner.height - 1;
+    let list_h = field_y.saturating_sub(list_top) as usize;
+    let n = dialog.entries.len();
+    if n > 0 {
+        let vis = list_h.max(1);
+        if dialog.selected >= dialog.scroll + vis {
+            dialog.scroll = dialog.selected + 1 - vis;
+        }
+        if dialog.selected < dialog.scroll {
+            dialog.scroll = dialog.selected;
+        }
+        if dialog.scroll > n.saturating_sub(vis) {
+            dialog.scroll = n.saturating_sub(vis);
+        }
+        for i in 0..vis {
+            let idx = dialog.scroll + i;
+            if idx >= n {
+                break;
+            }
+            let y = list_top + i as u16;
+            if y >= field_y {
+                break;
+            }
+            let p = &dialog.entries[idx];
+            let name = if p.ends_with("..") {
+                // the parent-directory entry: file_name() is None for ".."
+                "..".to_string()
+            } else {
+                p.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string_lossy().into_owned())
+            };
+            let is_dir = p.is_dir();
+            let label = if is_dir { format!("{name}/") } else { name };
+            let selected = idx == dialog.selected;
+            let style = if selected {
+                Style::default().fg(AYU_FG).bg(AYU_SEL_BG)
+            } else if is_dir {
+                Style::default().fg(AYU_BLUE)
+            } else {
+                Style::default().fg(AYU_FG)
+            };
+            f.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        if is_dir { "▶ " } else { "  " },
+                        Style::default().fg(AYU_DIM),
+                    ),
+                    Span::styled(label, style),
+                ])),
+                Rect {
+                    x: inner.x,
+                    y,
+                    width: inner.width,
+                    height: 1,
+                },
+            );
+        }
+    } else {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                if dialog.save {
+                    "(empty directory)"
+                } else {
+                    "no *.halshow files here"
+                },
+                Style::default().fg(AYU_DIM),
+            )),
+            Rect {
+                x: inner.x,
+                y: list_top,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
+    // filter / file-name field
+    let label = if dialog.save { "Name:  " } else { "Filter: " };
+    let field_style = if dialog.field { AYU_FG } else { AYU_DIM };
+    let mut field_text = input.buffer.clone();
+    field_text.push(' ');
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                label,
+                Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(field_text, Style::default().fg(field_style)),
+        ])),
+        Rect {
+            x: inner.x,
+            y: field_y,
+            width: inner.width,
+            height: 1,
+        },
+    );
+    if dialog.field {
+        let lab_w = label.chars().count() as u16;
+        let cursor_x = input.cursor.min(inner.width.saturating_sub(lab_w) as usize);
+        f.set_cursor_position(Position::new(inner.x + lab_w + cursor_x as u16, field_y));
+    }
+    // hint (or error)
+    let hint = match &dialog.error {
+        Some(e) => (e.clone(), AYU_ERROR),
+        None => (
+            "↑↓ move   Enter open/save   ← parent   type to filter/name   Esc cancel".to_string(),
+            AYU_DIM,
+        ),
+    };
+    f.render_widget(
+        Paragraph::new(Span::styled(hint.0, Style::default().fg(hint.1))),
+        Rect {
+            x: inner.x,
+            y: hint_y,
+            width: inner.width,
+            height: 1,
+        },
+    );
 }
 
 // ----------------------------------------------------------------
@@ -670,9 +840,17 @@ WATCH TAB
   e                   erase watch list
   a                   add item by name ("pin axis.0.pos" or just the name)
   o                   show item in tree + SHOW tab
-  S                   save watch list (one line per file, halshow default)
-  m                   save watch list (multiline format)
-  L                   load watch list (.halshow file)
+  S                   save watch list via file dialog (halshow default format)
+  m                   save watch list via file dialog (multiline format)
+  L                   load watch list via file dialog (.halshow file)
+
+  FILE DIALOG (S / m / L)
+  ↑↓ / PgUp / PgDn    move through the directory listing (always)
+  Enter               open a directory, or pick / save the selected file
+  ← / Backspace       go to the parent directory (Backspace edits the name first)
+  type                focus the filter / name field and type in it
+  Tab                 toggle the field focus (Enter then confirms / opens)
+  Esc                 cancel
 
   Newly added items are selected so they are scrolled into view.
 

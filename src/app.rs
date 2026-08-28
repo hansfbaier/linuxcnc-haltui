@@ -1,7 +1,7 @@
 //! Application state, event loop and key handling.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
@@ -53,6 +53,21 @@ pub enum InputAction {
 pub enum InputKind {
     Text,
     BitPick,
+    FileDialog,
+}
+
+/// State for the file open/save dialog. `entries` is refreshed from disk via
+/// [`refresh_dialog`]; each entry is a full path (dirs and files).
+#[derive(Debug)]
+pub struct FileDialog {
+    pub save: bool,
+    pub dir: PathBuf,
+    pub entries: Vec<PathBuf>,
+    pub selected: usize,
+    pub scroll: usize,
+    /// true = editing the filter (load) / file-name (save) field
+    pub field: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -64,6 +79,7 @@ pub struct InputState {
     /// selected radio in BitPick mode
     pub bit_value: bool,
     pub action: InputAction,
+    pub dialog: Option<FileDialog>,
 }
 
 impl InputState {
@@ -75,6 +91,7 @@ impl InputState {
             buffer,
             bit_value: false,
             action,
+            dialog: None,
         }
     }
 
@@ -86,8 +103,116 @@ impl InputState {
             cursor: 0,
             bit_value,
             action,
+            dialog: None,
         }
     }
+
+    /// Open the file dialog. `name` seeds the filter field (load) or the
+    /// file-name field (save).
+    fn file_dialog(save: bool, dir: PathBuf, name: String, action: InputAction) -> Self {
+        let mut dialog = FileDialog {
+            save,
+            dir,
+            entries: Vec::new(),
+            selected: 0,
+            scroll: 0,
+            // load: start browsing the list; save: start with the name field
+            field: save,
+            error: None,
+        };
+        refresh_dialog(&mut dialog, &name);
+        InputState {
+            kind: InputKind::FileDialog,
+            prompt: if save {
+                "Save watch list".to_string()
+            } else {
+                "Open watch list".to_string()
+            },
+            cursor: name.chars().count(),
+            buffer: name,
+            bit_value: false,
+            action,
+            dialog: Some(dialog),
+        }
+    }
+}
+
+/// Lexically resolve `.` / `..` components so a navigated directory path
+/// doesn't accumulate `..` (e.g. `/a/b/..`). Never touches the filesystem.
+fn norm_path(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        if p.is_absolute() {
+            PathBuf::from("/")
+        } else {
+            PathBuf::from(".")
+        }
+    } else {
+        out
+    }
+}
+
+/// Re-scan the dialog's directory into `entries`: ".." (unless at the root),
+/// then subdirectories, then files (`.halshow` only on load). In load mode the
+/// `filter` narrows the file list; in save mode files are not filtered.
+fn refresh_dialog(dialog: &mut FileDialog, filter: &str) {
+    dialog.dir = norm_path(&dialog.dir);
+    let mut dirs: Vec<String> = Vec::new();
+    let mut files: Vec<String> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dialog.dir) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                dirs.push(name);
+            } else if dialog.save || name.to_lowercase().ends_with(".halshow") {
+                files.push(name);
+            }
+        }
+    }
+    dirs.sort();
+    files.sort();
+    let fl = filter.trim().to_lowercase();
+    let show_all = fl.is_empty();
+    let mut entries: Vec<PathBuf> = Vec::new();
+    if dialog.dir.parent().is_some() {
+        entries.push(dialog.dir.join(".."));
+    }
+    for d in &dirs {
+        entries.push(dialog.dir.join(d));
+    }
+    if dialog.save {
+        for f in &files {
+            entries.push(dialog.dir.join(f));
+        }
+    } else {
+        for f in files
+            .iter()
+            .filter(|f| show_all || f.to_lowercase().contains(&fl))
+        {
+            entries.push(dialog.dir.join(f));
+        }
+    }
+    dialog.entries = entries;
+    if dialog.selected >= dialog.entries.len() {
+        dialog.selected = dialog.entries.len().saturating_sub(1);
+    }
+    if dialog.scroll > dialog.entries.len().saturating_sub(1) {
+        dialog.scroll = dialog.entries.len().saturating_sub(1);
+    }
+    dialog.error = None;
 }
 
 pub struct App {
@@ -563,19 +688,15 @@ impl App {
             self.set_status("Watchlist empty, nothing to save".to_string(), true);
             return;
         }
-        let prompt = if multiline {
-            "Save current watch list (multiline)"
+        let dir = if self.last_watch_dir.as_os_str().is_empty() {
+            PathBuf::from(".")
         } else {
-            "Save current watch list"
+            self.last_watch_dir.clone()
         };
-        let def = self
-            .last_watch_dir
-            .join(&self.last_watch_tail)
-            .to_string_lossy()
-            .into_owned();
-        self.input = Some(InputState::text(
-            prompt.to_string(),
-            def,
+        self.input = Some(InputState::file_dialog(
+            true,
+            dir,
+            self.last_watch_tail.clone(),
             InputAction::SaveWatchFile(multiline),
         ));
     }
@@ -889,6 +1010,14 @@ impl App {
     }
 
     fn on_input_key(&mut self, key: KeyEvent) {
+        if self
+            .input
+            .as_ref()
+            .is_some_and(|i| i.kind == InputKind::FileDialog)
+        {
+            self.on_dialog_key(key);
+            return;
+        }
         let Some(input) = &mut self.input else { return };
         match key.code {
             KeyCode::Esc => {
@@ -907,6 +1036,7 @@ impl App {
                             "0".to_string()
                         }
                     }
+                    InputKind::FileDialog => input.buffer,
                 };
                 self.apply_action(action, &buffer);
                 return;
@@ -959,6 +1089,170 @@ impl App {
                 }
                 _ => {}
             },
+            InputKind::FileDialog => {}
+        }
+    }
+
+    /// File open/save dialog key handling. The dialog owns a directory
+    /// listing; Tab switches between the list and the filter/file-name field.
+    fn on_dialog_key(&mut self, key: KeyEvent) {
+        let mut input = match self.input.take() {
+            Some(i) if i.kind == InputKind::FileDialog => i,
+            other => {
+                self.input = other;
+                return;
+            }
+        };
+        let mut dialog = match input.dialog.take() {
+            Some(d) => d,
+            None => {
+                self.input = None;
+                return;
+            }
+        };
+        let mut confirm: Option<String> = None;
+        let mut cancel = false;
+
+        let n = dialog.entries.len();
+        match key.code {
+            KeyCode::Esc => cancel = true,
+            KeyCode::Tab => dialog.field = !dialog.field,
+            // list navigation always works, whether or not the field is focused
+            KeyCode::Up => dialog.selected = dialog.selected.saturating_sub(1),
+            KeyCode::Down => dialog.selected = (dialog.selected + 1).min(n.saturating_sub(1)),
+            KeyCode::PageUp => dialog.selected = dialog.selected.saturating_sub(10),
+            KeyCode::PageDown => dialog.selected = (dialog.selected + 10).min(n.saturating_sub(1)),
+            KeyCode::Home => dialog.selected = 0,
+            KeyCode::End => dialog.selected = n.saturating_sub(1),
+            KeyCode::Left => {
+                if dialog.field && input.cursor > 0 {
+                    input.cursor -= 1;
+                } else if let Some(parent) = dialog.dir.parent() {
+                    dialog.dir = parent.to_path_buf();
+                    dialog.selected = 0;
+                    dialog.scroll = 0;
+                    refresh_dialog(&mut dialog, &input.buffer);
+                }
+            }
+            KeyCode::Right => {
+                if dialog.field {
+                    input.cursor = (input.cursor + 1).min(input.buffer.chars().count());
+                }
+            }
+            KeyCode::Backspace => {
+                if dialog.field && input.cursor > 0 && !input.buffer.is_empty() {
+                    input.cursor -= 1;
+                    remove_char_at(&mut input.buffer, input.cursor);
+                    if !dialog.save {
+                        refresh_dialog(&mut dialog, &input.buffer);
+                    }
+                } else if let Some(parent) = dialog.dir.parent() {
+                    dialog.dir = parent.to_path_buf();
+                    dialog.selected = 0;
+                    dialog.scroll = 0;
+                    refresh_dialog(&mut dialog, &input.buffer);
+                }
+            }
+            KeyCode::Delete => {
+                if dialog.field {
+                    remove_char_at(&mut input.buffer, input.cursor);
+                    if !dialog.save {
+                        refresh_dialog(&mut dialog, &input.buffer);
+                    }
+                }
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                dialog.field = true;
+                input.buffer.clear();
+                input.cursor = 0;
+                if !dialog.save {
+                    refresh_dialog(&mut dialog, &input.buffer);
+                }
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // typing focuses the filter/file-name field
+                dialog.field = true;
+                let pos = input
+                    .buffer
+                    .char_indices()
+                    .nth(input.cursor)
+                    .map(|(i, _)| i)
+                    .unwrap_or(input.buffer.len());
+                input.buffer.insert(pos, c);
+                input.cursor += 1;
+                if !dialog.save {
+                    refresh_dialog(&mut dialog, &input.buffer);
+                }
+            }
+            KeyCode::Enter => {
+                if dialog.field {
+                    let name = input.buffer.trim().to_string();
+                    if name.is_empty() {
+                        dialog.error = Some(if dialog.save {
+                            "Enter a file name".to_string()
+                        } else {
+                            "Type a filter or pick a file".to_string()
+                        });
+                    } else if dialog.save {
+                        confirm = Some(dialog.dir.join(&name).to_string_lossy().into_owned());
+                    } else {
+                        let cand = if Path::new(&name).is_absolute() {
+                            PathBuf::from(&name)
+                        } else {
+                            dialog.dir.join(&name)
+                        };
+                        if cand.is_dir() {
+                            dialog.dir = cand;
+                            dialog.selected = 0;
+                            dialog.scroll = 0;
+                            refresh_dialog(&mut dialog, &input.buffer);
+                        } else if cand.is_file() {
+                            confirm = Some(cand.to_string_lossy().into_owned());
+                        } else if let Some(p) = dialog.entries.get(dialog.selected) {
+                            // the typed text is a filter: open the highlighted file
+                            if p.is_file() {
+                                confirm = Some(p.to_string_lossy().into_owned());
+                            } else {
+                                dialog.error = Some(format!("no such file: {}", cand.display()));
+                            }
+                        } else {
+                            dialog.error = Some(format!("no such file: {}", cand.display()));
+                        }
+                    }
+                } else if let Some(p) = dialog.entries.get(dialog.selected) {
+                    if p.is_dir() {
+                        dialog.dir = p.clone();
+                        dialog.selected = 0;
+                        dialog.scroll = 0;
+                        refresh_dialog(&mut dialog, &input.buffer);
+                    } else if dialog.save {
+                        // picking an existing file seeds the name field
+                        input.buffer = p
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        input.cursor = input.buffer.chars().count();
+                        dialog.field = true;
+                    } else {
+                        confirm = Some(p.to_string_lossy().into_owned());
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if cancel {
+            self.input = None;
+            return;
+        }
+
+        if let Some(path) = confirm {
+            self.input = None;
+            let action = input.action;
+            self.apply_action(action, &path);
+        } else {
+            input.dialog = Some(dialog);
+            self.input = Some(input);
         }
     }
 
@@ -1419,14 +1713,15 @@ impl App {
                 self.show_node(kind, &name);
             }
             KeyCode::Char('L') => {
-                let def = self
-                    .last_watch_dir
-                    .join(&self.last_watch_tail)
-                    .to_string_lossy()
-                    .into_owned();
-                self.input = Some(InputState::text(
-                    "Load a watch list",
-                    def,
+                let dir = if self.last_watch_dir.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    self.last_watch_dir.clone()
+                };
+                self.input = Some(InputState::file_dialog(
+                    false,
+                    dir,
+                    String::new(),
                     InputAction::LoadWatchFile,
                 ));
             }
@@ -1504,4 +1799,19 @@ pub fn run<B: Backend<Error = io::Error>>(term: &mut Terminal<B>, app: &mut App)
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::norm_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn norm_resolves_dot_dot() {
+        assert_eq!(norm_path(Path::new("/a/b/..")), PathBuf::from("/a"));
+        assert_eq!(norm_path(Path::new("/a/b/../../c")), PathBuf::from("/c"));
+        assert_eq!(norm_path(Path::new("/")), PathBuf::from("/"));
+        assert_eq!(norm_path(Path::new("/a/./b")), PathBuf::from("/a/b"));
+        assert_eq!(norm_path(Path::new("/a/../..")), PathBuf::from("/"));
+    }
 }

@@ -131,7 +131,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
             " type = regex filter (live) | Ctrl+U clear | Esc/Enter done ".to_string()
         }
         (Focus::ShowText, None) => {
-            " ← tree | ↑↓/PgUp/PgDn scroll | a add shown to watch | c command | F3 content | F4 command ".to_string()
+            " ← tree | a add shown to watch | c command | F3 content | F4 command ".to_string()
         }
         (Focus::Command, None) => {
             " ← tree | Enter run halcmd | ↑↓ history | Esc back | Ctrl+U clear ".to_string()

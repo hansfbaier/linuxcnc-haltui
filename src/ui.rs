@@ -117,9 +117,9 @@ fn draw_no_hal(f: &mut Frame, area: Rect) {
     let lines = [
         "halcmd cannot connect to the HAL shared memory area.",
         "",
-        "LinuxCNC appears to be down or not yet started. haltui",
+        "The HAL appears to be down or not yet started. haltui",
         "keeps retrying every 2 seconds and will load the live",
-        "configuration automatically once LinuxCNC is running.",
+        "configuration automatically once the HAL is running.",
         "",
         "Press r to retry now, or q to quit.",
     ];

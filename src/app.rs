@@ -137,6 +137,17 @@ impl InputState {
     }
 }
 
+/// Pad a numeric string so positive values occupy the same width as negative
+/// ones: a space stands in for the `-` sign. Custom formats that already
+/// produce their own sign or width (leading space / `+`) are left untouched.
+fn sign_pad(s: &str) -> String {
+    if s.starts_with('-') || s.starts_with('+') || s.starts_with(' ') {
+        s.to_string()
+    } else {
+        format!(" {s}")
+    }
+}
+
 /// Lexically resolve `.` / `..` components so a navigated directory path
 /// doesn't accumulate `..` (e.g. `/a/b/..`). Never touches the filesystem.
 fn norm_path(p: &Path) -> PathBuf {
@@ -524,25 +535,27 @@ impl App {
         };
         if let Some(f) = fmt_override {
             if let Ok(v) = raw.parse::<f64>() {
-                if dtype == "float" || dtype == "hal_float" {
-                    return fmt::apply(f, &FmtArg::Float(v));
-                }
-                return fmt::apply(f, &FmtArg::Int(v as i64));
+                let out = if dtype == "float" || dtype == "hal_float" {
+                    fmt::apply(f, &FmtArg::Float(v))
+                } else {
+                    fmt::apply(f, &FmtArg::Int(v as i64))
+                };
+                return sign_pad(&out);
             }
-            return raw.to_string();
+            return sign_pad(raw);
         }
         if dtype == "float" || dtype == "hal_float" {
             if !self.prefs.ffmts.is_empty() {
                 if let Ok(v) = raw.parse::<f64>() {
-                    return fmt::apply(&self.prefs.ffmts, &FmtArg::Float(v));
+                    return sign_pad(&fmt::apply(&self.prefs.ffmts, &FmtArg::Float(v)));
                 }
             }
         } else if matches!(dtype, "s32" | "u32") && !self.prefs.ifmts.is_empty() {
             if let Ok(v) = raw.parse::<i64>() {
-                return fmt::apply(&self.prefs.ifmts, &FmtArg::Int(v));
+                return sign_pad(&fmt::apply(&self.prefs.ifmts, &FmtArg::Int(v)));
             }
         }
-        raw.to_string()
+        sign_pad(raw)
     }
 
     pub fn watch_set(&mut self, idx: usize, val: &str) {
@@ -1631,7 +1644,7 @@ impl App {
                     } else {
                         self.input = Some(InputState::text(
                             format!("Set {label}"),
-                            w.value.clone(),
+                            w.value.trim().to_string(),
                             InputAction::SetValue(idx),
                         ));
                     }
@@ -1803,7 +1816,7 @@ pub fn run<B: Backend<Error = io::Error>>(term: &mut Terminal<B>, app: &mut App)
 
 #[cfg(test)]
 mod tests {
-    use super::norm_path;
+    use super::{norm_path, sign_pad};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -1813,5 +1826,15 @@ mod tests {
         assert_eq!(norm_path(Path::new("/")), PathBuf::from("/"));
         assert_eq!(norm_path(Path::new("/a/./b")), PathBuf::from("/a/b"));
         assert_eq!(norm_path(Path::new("/a/../..")), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn sign_pad_aligns_positive_and_negative() {
+        assert_eq!(sign_pad("12.5"), " 12.5");
+        assert_eq!(sign_pad("-12.5"), "-12.5");
+        assert_eq!(sign_pad("42"), " 42");
+        assert_eq!(sign_pad(" 12.5"), " 12.5");
+        assert_eq!(sign_pad("+12.5"), "+12.5");
+        assert_eq!(sign_pad("0"), " 0");
     }
 }

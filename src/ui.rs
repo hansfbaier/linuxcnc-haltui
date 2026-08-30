@@ -181,7 +181,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         (_, Some(_)) => " Enter ok | Esc cancel | Ctrl+U clear | F1 help ".to_string(),
         (Focus::Tree, None) => {
             " → expand closed / → pane if scrollable | ← collapse | Enter open/add | Space toggle/a leaf | a add | A add subtree | \
-             s show | e/w expand/collapse all | E/W this type | / filter | f full-path | r reload | \
+             s show | e/w expand/collapse all | E/W this type | / filter | f full-path | r reload | S/m save | L load | \
              F2 tree | [ ] resize ".to_string()
         }
         (Focus::Filter, None) => {
@@ -864,6 +864,7 @@ TREE PANEL
   /                   focus filter entry
   f                   toggle full-path regex matching
   Ctrl+U (filter)     clear filter
+  S / m / L           save / save multiline / load the watch list (file dialog)
 
 FILTER ENTRY
   type                live regex filter; matching branches auto-reveal

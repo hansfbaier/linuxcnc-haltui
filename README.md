@@ -86,6 +86,7 @@ jumps to the right pane when useful (WATCH list, or SHOW output longer
 than one page), `←` collapse / parent, `Space` toggle, `Enter` show or
 add-to-watch, `a` add leaf, `A` add subtree, `s` show in SHOW, `e`/`w`
 expand/collapse all, `E`/`W` per type, `/` filter, `f` full-path, `r` reload.
+`S`/`m`/`L` save / load the watch list (file dialog) work from the tree too.
 
 **SHOW:** `↑↓ PgUp PgDn Home` scroll, `a` add shown item, `c` focus command.
 

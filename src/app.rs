@@ -742,6 +742,21 @@ impl App {
         ));
     }
 
+    /// Open the file dialog to load a `.halshow` watch list.
+    fn open_load_dialog(&mut self) {
+        let dir = if self.last_watch_dir.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            self.last_watch_dir.clone()
+        };
+        self.input = Some(InputState::file_dialog(
+            false,
+            dir,
+            String::new(),
+            InputAction::LoadWatchFile,
+        ));
+    }
+
     pub fn save_watch_file(&mut self, path: &str, multiline: bool) {
         let text = crate::watch::file_text(&self.watch, multiline);
         if let Err(e) = std::fs::write(path, text) {
@@ -1571,6 +1586,13 @@ impl App {
                 }
                 self.tree.rebuild(&self.hal);
             }
+            KeyCode::Char('L') => self.open_load_dialog(),
+            KeyCode::Char('S') => {
+                self.save_watch_prompt(false);
+            }
+            KeyCode::Char('m') => {
+                self.save_watch_prompt(true);
+            }
             _ => {}
         }
     }
@@ -1759,19 +1781,7 @@ impl App {
                 self.focus = Focus::ShowText;
                 self.show_node(kind, &name);
             }
-            KeyCode::Char('L') => {
-                let dir = if self.last_watch_dir.as_os_str().is_empty() {
-                    PathBuf::from(".")
-                } else {
-                    self.last_watch_dir.clone()
-                };
-                self.input = Some(InputState::file_dialog(
-                    false,
-                    dir,
-                    String::new(),
-                    InputAction::LoadWatchFile,
-                ));
-            }
+            KeyCode::Char('L') => self.open_load_dialog(),
             KeyCode::Char('S') => {
                 self.save_watch_prompt(false);
             }

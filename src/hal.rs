@@ -207,6 +207,23 @@ impl HalSession {
         }
     }
 
+    /// Drop the session so the next use (re)spawns immediately.
+    pub fn restart(&mut self) {
+        self.kill();
+        self.last_spawn = Instant::now() - Duration::from_secs(10);
+    }
+
+    /// True when a real LinuxCNC session is available. A bare `halcmd` call
+    /// initializes an empty HAL on its own (transient component `halcmd<pid>`),
+    /// so a success exit code is not enough: we check for a `linuxcnc`/`halrun`
+    /// process, or for HAL containing any non-transient component.
+    pub fn available(&self) -> bool {
+        if proc_running("linuxcnc") || proc_running("halrun") {
+            return true;
+        }
+        comps_available(&Self::exec(&["list", "comp"]))
+    }
+
     /// Send N commands, read N response lines.
     pub fn batch(&mut self, cmds: &[String]) -> Vec<BatchOut> {
         if cmds.is_empty() {
@@ -285,6 +302,28 @@ impl HalSession {
     pub fn show(&self, t: HalType, name: &str) -> String {
         Self::exec(&["show", t.kw(), name])
     }
+}
+
+/// Whether a process whose executable basename is `name` is running.
+fn proc_running(name: &str) -> bool {
+    let Ok(out) = Command::new("ps").args(["-e", "-o", "args="]).output() else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().any(|l| {
+        l.split_whitespace()
+            .any(|t| t.rsplit('/').next().map(|b| b == name).unwrap_or(false))
+    })
+}
+
+/// Does a `halcmd list comp` output indicate a real session? Transient
+/// `halcmd<pid>` components (created by halcmd itself) are ignored; a
+/// `halcmd: ...` prefix means the binary is missing or failed to run.
+fn comps_available(comps: &str) -> bool {
+    if comps.starts_with("halcmd:") {
+        return false;
+    }
+    comps.split_whitespace().any(|c| !c.starts_with("halcmd"))
 }
 
 /// halcmd error lines from a `-f` session look like `<stdin>:7: message`.
@@ -373,6 +412,20 @@ pub fn sig_writable(show_out: &str) -> i8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comps_available_detects_real_session() {
+        // empty / only transient halcmd comps -> not running
+        assert!(!comps_available(""));
+        assert!(!comps_available("halcmd12345"));
+        assert!(!comps_available("halcmd1 halcmd2"));
+        // any real component -> running
+        assert!(comps_available("halcmd1 abs"));
+        assert!(comps_available("abs"));
+        assert!(comps_available("motmod\nrio"));
+        // missing binary / spawn failure -> not running
+        assert!(!comps_available("halcmd: No such file or directory"));
+    }
 
     #[test]
     fn session_batch() {

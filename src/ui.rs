@@ -85,8 +85,65 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_tree_panel(f, app, main[0]);
     draw_right(f, app, main[1]);
 
+    if !app.hal_up {
+        draw_no_hal(f, rows[1]);
+    }
     if let Some(input) = &mut app.input {
         draw_input_popup(f, input);
+    }
+}
+
+/// Non-blocking overlay shown while LinuxCNC is down. It does not trap keys:
+/// haltui keeps retrying on its poll loop and dismisses itself when HAL
+/// becomes available.
+fn draw_no_hal(f: &mut Frame, area: Rect) {
+    let w = (area.width.saturating_sub(4)).min(68);
+    let h = 10;
+    let rect = Rect {
+        x: area.x + area.width.saturating_sub(w) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, rect);
+    f.render_widget(
+        ayu_block()
+            .title(" LinuxCNC not running ")
+            .title_style(Style::default().fg(AYU_ERROR).add_modifier(Modifier::BOLD))
+            .border_style(Style::default().fg(AYU_ERROR))
+            .style(Style::default().bg(AYU_PANEL)),
+        rect,
+    );
+    let lines = [
+        "halcmd cannot connect to the HAL shared memory area.",
+        "",
+        "LinuxCNC appears to be down or not yet started. haltui",
+        "keeps retrying every 2 seconds and will load the live",
+        "configuration automatically once LinuxCNC is running.",
+        "",
+        "Press r to retry now, or q to quit.",
+    ];
+    for (i, line) in lines.iter().enumerate() {
+        if i as u16 >= rect.height.saturating_sub(2) {
+            break;
+        }
+        let y = rect.y + 1 + i as u16;
+        let style = if line.is_empty() {
+            Style::default()
+        } else if i == 0 {
+            Style::default().fg(AYU_ERROR)
+        } else {
+            Style::default().fg(AYU_FG)
+        };
+        f.render_widget(
+            Paragraph::new(Span::styled(*line, style)),
+            Rect {
+                x: rect.x + 2,
+                y,
+                width: rect.width.saturating_sub(4),
+                height: 1,
+            },
+        );
     }
 }
 

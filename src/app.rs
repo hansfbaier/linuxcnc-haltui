@@ -273,7 +273,10 @@ pub struct App {
     pub last_watch_tail: String,
     pub title: String,
 
+    /// Whether a running LinuxCNC / HAL was detected (drives the no-HAL banner).
+    pub hal_up: bool,
     last_tick: Instant,
+    last_probe: Instant,
 }
 
 impl App {
@@ -326,7 +329,9 @@ impl App {
             last_watch_dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             last_watch_tail: "my.halshow".to_string(),
             title: "Halshow".to_string(),
+            hal_up: false,
             last_tick: Instant::now(),
+            last_probe: Instant::now(),
         };
         app.prefs.watch_interval = interval;
         app
@@ -335,6 +340,10 @@ impl App {
     /// Initial HAL/tree/watchlist load.
     pub fn startup(&mut self, cli: &Cli) {
         self.hal.ensure();
+        self.hal_up = self.hal.available();
+        if !self.hal_up {
+            self.set_status("LinuxCNC is not running".to_string(), true);
+        }
         if let Some(f) = &cli.watchfile {
             if Path::new(f).is_file() {
                 self.load_watch_file(f);
@@ -379,9 +388,28 @@ impl App {
     pub fn poll_if_due(&mut self) {
         if self.last_tick.elapsed() >= Duration::from_millis(self.prefs.watch_interval.max(20)) {
             self.last_tick = Instant::now();
+            self.probe_hal();
             if self.tab == Tab::Watch {
                 self.poll_watch();
             }
+        }
+    }
+
+    /// If HAL is believed down, re-probe (throttled) and recover automatically
+    /// once LinuxCNC comes up: rebuild the tree and reload the watch list.
+    fn probe_hal(&mut self) {
+        if self.hal_up || self.last_probe.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        self.last_probe = Instant::now();
+        if self.hal.available() {
+            self.hal.restart();
+            self.hal_up = true;
+            self.tree.rebuild(&self.hal);
+            if self.tab == Tab::Watch {
+                self.poll_watch();
+            }
+            self.set_status("LinuxCNC detected".to_string(), false);
         }
     }
 
@@ -1536,7 +1564,13 @@ impl App {
                 self.tree.full_path = !self.tree.full_path;
                 self.tree.rebuild(&self.hal);
             }
-            KeyCode::Char('r') => self.tree.rebuild(&self.hal),
+            KeyCode::Char('r') => {
+                self.hal_up = self.hal.available();
+                if self.hal_up {
+                    self.hal.restart();
+                }
+                self.tree.rebuild(&self.hal);
+            }
             _ => {}
         }
     }

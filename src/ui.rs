@@ -42,6 +42,40 @@ fn ayu_block() -> Block<'static> {
         .title_style(Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD))
 }
 
+/// Bordered pane block that shows where the keyboard focus is. The focused
+/// pane gets an accent border plus an inverse title bar; the unfocused pane
+/// stays dim so the eye lands on the pane that receives keys.
+fn pane_block(title: &str, focused: bool) -> Block<'static> {
+    if focused {
+        Block::bordered()
+            .border_style(Style::default().fg(AYU_ACCENT).add_modifier(Modifier::BOLD))
+            .title(Span::styled(
+                format!(" \u{25b6} {title} "),
+                Style::default()
+                    .fg(AYU_BG)
+                    .bg(AYU_ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ))
+    } else {
+        Block::bordered()
+            .border_style(Style::default().fg(AYU_DIM))
+            .title(Span::styled(
+                format!(" {title} "),
+                Style::default().fg(AYU_DIM),
+            ))
+    }
+}
+
+/// The left pane owns the keys while the tree or its filter entry is focused.
+fn left_focused(app: &App) -> bool {
+    app.input.is_none() && matches!(app.focus, Focus::Tree | Focus::Filter)
+}
+
+/// The right pane owns the keys for anything inside the tab content.
+fn right_focused(app: &App) -> bool {
+    app.input.is_none() && matches!(app.focus, Focus::ShowText | Focus::Command | Focus::Watch)
+}
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();
     // ayu-dark base colors
@@ -213,7 +247,8 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = ayu_block().title("Tree View");
+    let left_focus = left_focused(app);
+    let block = pane_block("Tree View", left_focus);
     f.render_widget(block.clone(), area);
     let inner = block.inner(area);
     // list on top, filter entry on its own bottom row (no overlay, so the
@@ -264,13 +299,17 @@ fn draw_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     if app.tree_list.selected().is_none() || app.tree_list.selected() != sel {
         app.tree_list.select(sel);
     }
+    // selection is brighter while the left pane is the focus target
+    let sel_style = if left_focus {
+        Style::default()
+            .fg(AYU_FG)
+            .bg(AYU_SEL_BG)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(AYU_FG).bg(AYU_PANEL)
+    };
     let list = List::new(items)
-        .highlight_style(
-            Style::default()
-                .fg(AYU_FG)
-                .bg(AYU_SEL_BG)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(sel_style)
         .highlight_symbol("");
     f.render_stateful_widget(list, list_area, &mut app.tree_list);
 
@@ -330,7 +369,7 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
-    let block = ayu_block().title(" HAL show output ");
+    let block = pane_block("HAL show output", right_focused(app));
     let inner = block.inner(rows[0]);
     // viewport rows for paging
     app.show_page = inner.height.max(1) as usize;
@@ -380,11 +419,12 @@ fn draw_show(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_watch(f: &mut Frame, app: &mut App, area: Rect) {
     // viewport rows for paging (panel minus border)
     app.watch_page = area.height.saturating_sub(2).max(1) as usize;
+    let watch_focus = right_focused(app);
     if app.watch.is_empty() {
         let hint = "Watchlist empty.\n<-- Select a leaf in the tree, press Enter (WATCH tab) or 'a'.\n    Press 'a' here to add by name.";
         f.render_widget(
             Paragraph::new(hint)
-                .block(ayu_block().title(" WATCH "))
+                .block(pane_block("WATCH", watch_focus))
                 .style(Style::default().fg(AYU_DIM)),
             area,
         );
@@ -397,15 +437,19 @@ fn draw_watch(f: &mut Frame, app: &mut App, area: Rect) {
         Constraint::Length(12),
     ];
     let rows: Vec<Row> = app.watch.iter().map(|w| watch_row(w, name_w)).collect();
+    // row highlight only glows while the right pane owns the keys
+    let row_sel_style = if watch_focus {
+        Style::default()
+            .fg(AYU_FG)
+            .bg(AYU_SEL_BG)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(AYU_FG).bg(AYU_PANEL)
+    };
     let table = Table::new(rows, widths)
-        .block(ayu_block().title(" WATCH "))
+        .block(pane_block("WATCH", watch_focus))
         .column_spacing(1)
-        .row_highlight_style(
-            Style::default()
-                .fg(AYU_FG)
-                .bg(AYU_SEL_BG)
-                .add_modifier(Modifier::BOLD),
-        )
+        .row_highlight_style(row_sel_style)
         .highlight_symbol("▶ ")
         .style(if app.focus == Focus::Watch {
             Style::default().fg(AYU_FG)
@@ -526,7 +570,7 @@ fn draw_settings(f: &mut Frame, app: &mut App, area: Rect) {
         app.settings_state.select(Some(0));
     }
     let list = List::new(items)
-        .block(ayu_block().title(" SETTINGS "))
+        .block(pane_block("SETTINGS", app.input.is_none()))
         .highlight_style(
             Style::default()
                 .fg(AYU_FG)
@@ -844,6 +888,7 @@ GLOBAL
   F3                  focus current tab content
   F4                  focus HAL command entry
   F5                  open / close the settings screen
+  focus               active pane has an orange border + inverse title
   /                   fresh search from any panel (clears previous filter)
   [ / ]               shrink / grow tree panel
   r                   reload (tree: refresh from HAL, watch: re-read writability)
